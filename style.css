@@ -63,6 +63,35 @@ input {
     box-sizing: border-box;
 }
 
+/* 🔹 Botões para câmera e galeria */
+.photo-buttons {
+    display: flex;
+    gap: 0.8rem;              /* espaço entre os botões */
+    justify-content: space-between;
+}
+
+.photo-buttons label {
+    flex: 1;
+    background: #4A90E2;
+    color: white;
+    text-align: center;
+    padding: 0.6rem;
+    border-radius: 6px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+.photo-buttons label:hover {
+    background: #357ABD;
+}
+
+/* Esconde os inputs originais */
+.photo-buttons input {
+    display: none;
+}
+
 /* Botão principal do formulário */
 #submitButton {
     width: 100%;

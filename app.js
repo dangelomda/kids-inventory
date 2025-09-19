@@ -11,6 +11,11 @@ const itemList = document.getElementById('itemList');
 const submitButton = document.getElementById('submitButton');
 const searchInput = document.getElementById('searchInput');
 const exportButton = document.getElementById('exportButton');
+
+// 🔹 Novos inputs de foto
+const inputPhotoCamera = document.getElementById("itemPhotoCamera");
+const inputPhotoGallery = document.getElementById("itemPhotoGallery");
+
 let editingId = null;
 
 // 🔹 Compressão da imagem
@@ -39,7 +44,18 @@ async function compressImage(file, maxWidth = 800, quality = 0.7) {
   });
 }
 
-// 🔹 Listar itens (com filtro opcional de busca)
+// 🔹 Pegar o arquivo (da câmera OU da galeria)
+function getSelectedFile() {
+  if (inputPhotoCamera.files.length > 0) {
+    return inputPhotoCamera.files[0];
+  }
+  if (inputPhotoGallery.files.length > 0) {
+    return inputPhotoGallery.files[0];
+  }
+  return null;
+}
+
+// 🔹 Listar itens
 async function loadItems(filter = "") {
   let query = supabase.from('items').select('*').order('created_at', { ascending: false });
 
@@ -85,7 +101,7 @@ itemForm.addEventListener('submit', async (e) => {
   const name = document.getElementById('itemName').value.trim();
   const quantity = Number(document.getElementById('itemQuantity').value) || 0;
   const location = document.getElementById('itemLocation').value.trim();
-  let file = document.getElementById('itemPhoto').files[0];
+  let file = getSelectedFile(); // 🔹 usa câmera ou galeria
 
   submitButton.disabled = true;
   submitButton.textContent = editingId ? "Salvando..." : "Cadastrando...";
@@ -138,6 +154,8 @@ itemForm.addEventListener('submit', async (e) => {
 
   submitButton.disabled = false;
   itemForm.reset();
+  inputPhotoCamera.value = "";  // 🔹 limpa inputs
+  inputPhotoGallery.value = "";
   loadItems();
 });
 

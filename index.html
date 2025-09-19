@@ -39,9 +39,16 @@
           <input type="text" id="itemLocation" required>
         </div>
         <div class="input-group">
-          <label for="itemPhoto">Foto:</label>
-          <!-- no celular abre direto a câmera -->
-          <input type="file" id="itemPhoto" accept="image/*" capture="environment">
+          <label>Foto:</label>
+          <div class="photo-buttons">
+            <!-- Botão para abrir direto a câmera -->
+            <input type="file" id="itemPhotoCamera" accept="image/*" capture="environment" style="display:none">
+            <button type="button" onclick="document.getElementById('itemPhotoCamera').click()">📷 Usar Câmera</button>
+
+            <!-- Botão para abrir galeria/arquivos -->
+            <input type="file" id="itemPhotoGallery" accept="image/*" style="display:none">
+            <button type="button" onclick="document.getElementById('itemPhotoGallery').click()">🖼️ Escolher da Galeria</button>
+          </div>
         </div>
         <button type="submit" id="submitButton">Cadastrar</button>
       </form>
