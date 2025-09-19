@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Inventário Kids - Ministério Infantil - DEAvila</title>
+  
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="public/favicon.svg">
+
+  <!-- Estilos -->
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+</head>
+<body>
+  <header>
+    <img src="public/logo.svg" alt="Logo Inventário Kids" class="logo">
+    <h1>Inventário Kids</h1>
+  </header>
+
+  <main>
+    <!-- Cadastro de Itens -->
+    <section class="form-container">
+      <h2>Cadastrar Novo Item</h2>
+      <form id="itemForm">
+        <input type="hidden" id="itemId">
+        <div class="input-group">
+          <label for="itemName">Item:</label>
+          <input type="text" id="itemName" required>
+        </div>
+        <div class="input-group">
+          <label for="itemQuantity">Quantidade:</label>
+          <input type="number" id="itemQuantity" required min="0">
+        </div>
+        <div class="input-group">
+          <label for="itemLocation">Local:</label>
+          <input type="text" id="itemLocation" required>
+        </div>
+        <div class="input-group">
+          <label for="itemPhoto">Foto:</label>
+          <!-- no celular abre direto a câmera -->
+          <input type="file" id="itemPhoto" accept="image/*" capture="environment">
+        </div>
+        <button type="submit" id="submitButton">Cadastrar</button>
+      </form>
+    </section>
+
+    <!-- Lista e Busca -->
+    <section class="list-container">
+      <h2>Materiais Cadastrados</h2>
+      <div class="search-bar">
+        <input type="text" id="searchInput" placeholder="🔍 Buscar item...">
+      </div>
+      <div id="itemList" class="item-grid"></div>
+    </section>
+  </main>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>
