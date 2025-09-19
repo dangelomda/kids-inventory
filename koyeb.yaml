@@ -1,0 +1,5 @@
+name: kids-inventory
+type: static
+
+static:
+  publish: .
