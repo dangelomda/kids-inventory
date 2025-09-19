@@ -171,3 +171,26 @@ input {
     border-color: #4A90E2;
     box-shadow: 0 0 5px rgba(74, 144, 226, 0.5);
 }
+
+/* 🔹 Botão de exportação */
+.export-bar {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 1rem;
+}
+
+#exportButton {
+    background: #27ae60;
+    color: white;
+    border: none;
+    padding: 0.6rem 1.2rem;
+    border-radius: 6px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+#exportButton:hover {
+    background: #1e8449;
+}

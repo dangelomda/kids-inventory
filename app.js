@@ -1,4 +1,5 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
+import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
 
 const SUPABASE_URL = "https://msvmsaznklubseypxsbs.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1zdm1zYXpua2x1YnNleXB4c2JzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgyMzQ4MzQsImV4cCI6MjA3MzgxMDgzNH0.ZGDD31UVRtwUEpDBkGg6q_jgV8JD_yXqWtuZ_1dprrw";
@@ -9,6 +10,7 @@ const itemForm = document.getElementById('itemForm');
 const itemList = document.getElementById('itemList');
 const submitButton = document.getElementById('submitButton');
 const searchInput = document.getElementById('searchInput');
+const exportButton = document.getElementById('exportButton');
 let editingId = null;
 
 // 🔹 Compressão da imagem
@@ -91,7 +93,6 @@ itemForm.addEventListener('submit', async (e) => {
   let photo_url = null;
 
   if (editingId) {
-    // ---------- UPDATE ----------
     if (file) {
       file = await compressImage(file, 800, 0.7);
 
@@ -116,7 +117,6 @@ itemForm.addEventListener('submit', async (e) => {
     editingId = null;
     submitButton.textContent = "Cadastrar";
   } else {
-    // ---------- DUPLICADOS ----------
     const { data: existing } = await supabase.from('items').select('id').eq('name', name).maybeSingle();
     if (existing) {
       alert("⚠️ Este item já está cadastrado!");
@@ -125,7 +125,6 @@ itemForm.addEventListener('submit', async (e) => {
       return;
     }
 
-    // ---------- INSERT ----------
     if (file) {
       file = await compressImage(file, 800, 0.7);
       const fileName = `${Date.now()}-${file.name}`;
@@ -171,6 +170,28 @@ window.deleteItem = async (id) => {
 searchInput.addEventListener("input", (e) => {
   const value = e.target.value.trim();
   loadItems(value);
+});
+
+// 🔹 Exportar para Excel
+exportButton.addEventListener("click", async () => {
+  const { data, error } = await supabase.from("items").select("*").order("created_at", { ascending: false });
+  if (error || !data || data.length === 0) {
+    alert("Nenhum item para exportar.");
+    return;
+  }
+
+  const rows = data.map(item => ({
+    Item: item.name,
+    Quantidade: item.quantity,
+    Local: item.location,
+    Foto: item.photo_url || "Sem foto"
+  }));
+
+  const worksheet = XLSX.utils.json_to_sheet(rows);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Inventário");
+
+  XLSX.writeFile(workbook, "inventario_kids.xlsx");
 });
 
 // 🔹 Inicial
