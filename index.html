@@ -18,6 +18,8 @@
   <header>
     <img src="public/logo.svg" alt="Logo Inventário Kids" class="logo">
     <h1>Inventário Kids</h1>
+    <!-- 🔹 Botão Admin (invisível até login como admin) -->
+    <button id="adminButton" style="display:none;">⚙️ Admin</button>
   </header>
 
   <main>
@@ -39,16 +41,9 @@
           <input type="text" id="itemLocation" required>
         </div>
         <div class="input-group">
-          <label>Foto:</label>
-          <div class="photo-buttons">
-            <!-- Botão para abrir direto a câmera -->
-            <input type="file" id="itemPhotoCamera" accept="image/*" capture="environment" style="display:none">
-            <button type="button" onclick="document.getElementById('itemPhotoCamera').click()">📷 Usar Câmera</button>
-
-            <!-- Botão para abrir galeria/arquivos -->
-            <input type="file" id="itemPhotoGallery" accept="image/*" style="display:none">
-            <button type="button" onclick="document.getElementById('itemPhotoGallery').click()">🖼️ Escolher da Galeria</button>
-          </div>
+          <label for="itemPhoto">Foto:</label>
+          <!-- no celular abre direto a câmera -->
+          <input type="file" id="itemPhoto" accept="image/*" capture="environment">
         </div>
         <button type="submit" id="submitButton">Cadastrar</button>
       </form>
@@ -68,6 +63,44 @@
       </div>
     </section>
   </main>
+
+  <!-- 🔹 Modal de Login -->
+  <div id="loginModal" class="modal">
+    <div class="modal-content">
+      <span id="closeLoginModal" class="close">&times;</span>
+      <h2>🔐 Login</h2>
+      <form id="loginForm">
+        <div class="input-group">
+          <label for="loginEmail">E-mail:</label>
+          <input type="email" id="loginEmail" required>
+        </div>
+        <div class="input-group">
+          <label for="loginPassword">Senha:</label>
+          <input type="password" id="loginPassword" required>
+        </div>
+        <div class="input-group checkbox">
+          <label><input type="checkbox" id="rememberMe"> Manter conectado</label>
+        </div>
+        <button type="submit">Entrar</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- 🔹 Modal Admin (convites e controle de usuários) -->
+  <div id="adminModal" class="modal">
+    <div class="modal-content">
+      <span id="closeAdminModal" class="close">&times;</span>
+      <h2>⚙️ Administração</h2>
+      <form id="inviteForm">
+        <div class="input-group">
+          <label for="inviteEmail">Convidar por e-mail:</label>
+          <input type="email" id="inviteEmail" required>
+        </div>
+        <button type="submit">Convidar</button>
+      </form>
+      <div id="userList"></div>
+    </div>
+  </div>
 
   <script src="app.js" type="module"></script>
 </body>
