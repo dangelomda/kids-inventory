@@ -10,17 +10,18 @@ header {
     background: #4A90E2;
     color: white;
     padding: 1rem;
-    display: flex;               
-    align-items: center;         
-    justify-content: center;     
-    gap: 12px;                   
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    flex-wrap: wrap; /* 🔹 deixa o header quebrar no mobile */
 }
 
 header .logo {
-    height: 45px;                
+    height: 45px;
     width: auto;
     display: block;
-    margin-top: -8px;            
+    margin-top: -8px;
 }
 
 /* Botão Admin */
@@ -95,6 +96,33 @@ input {
 }
 
 #submitButton:hover {
+    background: #357ABD;
+}
+
+/* 🔹 Botões de foto (câmera/galeria) */
+.photo-buttons {
+    display: flex;
+    flex-wrap: wrap;   /* 🔹 quebra no celular */
+    gap: 10px;
+    margin-top: 5px;
+}
+
+.photo-buttons button {
+    flex: 1;
+    min-width: 140px;
+    background: #4A90E2;
+    color: white;
+    border: none;
+    padding: 0.6rem 1rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 600;
+    transition: background-color 0.3s ease;
+    text-align: center;
+}
+
+.photo-buttons button:hover {
     background: #357ABD;
 }
 
@@ -277,4 +305,28 @@ input {
 @keyframes fadeIn {
     from { opacity: 0; transform: translateY(-20px); }
     to { opacity: 1; transform: translateY(0); }
+}
+
+/* 🔹 Responsividade extra para celular */
+@media (max-width: 480px) {
+    header {
+        flex-direction: column;
+        text-align: center;
+    }
+
+    .photo-buttons {
+        flex-direction: column;
+    }
+
+    .photo-buttons button {
+        width: 100%;
+    }
+
+    .actions {
+        flex-direction: column;
+    }
+
+    .actions button {
+        max-width: 100%;
+    }
 }
