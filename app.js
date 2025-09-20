@@ -3,7 +3,7 @@ import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
 
 /* ================== CONFIG SUPABASE ================== */
 const SUPABASE_URL = "https://msvmsaznklubseypxsbs.supabase.co";   // use o seu
-const SUPABASE_KEY = "SEU_ANON_KEY_AQUI";                          // ANON key (não use service role no front!)
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1zdm1zYXpua2x1YnNleXB4c2JzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgyMzQ4MzQsImV4cCI6MjA3MzgxMDgzNH0.ZGDD31UVRtwUEpDBkGg6q_jgV8JD_yXqWtuZ_1dprrw";                          // ANON key (não use service role no front!)
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: { persistSession: true, autoRefreshToken: true }
