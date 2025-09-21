@@ -79,7 +79,7 @@ async function loadItems(filter = "") {
     const card = document.createElement('div');
     card.className = 'item-card';
     card.innerHTML = `
-      <img src="${item.photo_url || 'https://via.placeholder.com/150'}" alt="${item.name}">
+      <img src="${item.photo_url || ''}" alt="${item.name}">
       <h3>${item.name}</h3>
       <p><b>Qtd:</b> ${item.quantity}</p>
       <p><b>Local:</b> ${item.location}</p>
