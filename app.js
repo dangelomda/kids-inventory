@@ -24,7 +24,7 @@ const inputPhotoGallery = document.getElementById("itemPhotoGallery");
 const btnUseCamera  = document.getElementById("btnUseCamera");
 const btnUseGallery = document.getElementById("btnUseGallery");
 
-/* Badge no header (oficial) */
+/* Badge */
 const userBadge     = document.getElementById('userBadge');
 const userBadgeText = document.getElementById('userBadgeText');
 const userBadgeDot  = document.getElementById('userBadgeDot');
@@ -41,7 +41,7 @@ const accountTitle      = document.getElementById('accountTitle');
 const accountSubtitle   = document.getElementById('accountSubtitle');
 const goAdminBtn        = document.getElementById('goAdminBtn');
 
-/* Painel Admin */
+/* Admin panel */
 const profilesBody = document.getElementById('profilesBody');
 const addUserBtn   = document.getElementById('addUserBtn');
 const newUserEmail = document.getElementById('newUserEmail');
@@ -50,6 +50,7 @@ const newUserEmail = document.getElementById('newUserEmail');
    ESTADO
    ================================================= */
 let editingId = null;
+let editingPhotoUrl = null;   // <- foto atual do item em edição
 let currentUser = null;
 let currentRole = 'visitor';
 
@@ -70,7 +71,6 @@ function setBadge(email, role) {
   userBadgeDot.classList.add(r);
 }
 
-/* Imagem: compressão simples */
 async function compressImage(file, maxWidth = 800, quality = 0.7) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -92,6 +92,21 @@ async function compressImage(file, maxWidth = 800, quality = 0.7) {
   });
 }
 
+/* extrai o caminho do objeto a partir da URL pública do storage */
+function pathFromPublicUrl(url) {
+  try {
+    const u = new URL(url);
+    const marker = '/object/public/';
+    const i = u.pathname.indexOf(marker);
+    if (i === -1) return null;
+    let tail = u.pathname.slice(i + marker.length); // ex: item-photos/123.jpg
+    if (!tail.startsWith('item-photos/')) return null;
+    return tail.replace('item-photos/', '');        // ex: 123.jpg
+  } catch {
+    return null;
+  }
+}
+
 /* =================================================
    AUTH
    ================================================= */
@@ -101,18 +116,25 @@ async function refreshAuth() {
 
   if (currentUser?.email) {
     const email = currentUser.email.toLowerCase();
-    const { data: prof, error } = await supabase
+
+    // tenta carregar o perfil
+    let { data: prof, error } = await supabase
       .from('profiles')
-      .select('email, role, created_at')
+      .select('id, email, role, created_at')
       .ilike('email', email)
       .maybeSingle();
 
-    if (error) {
-      console.warn('Erro ao carregar perfil:', error.message);
-      currentRole = 'visitor';
-    } else {
-      currentRole = prof?.role || 'visitor';
+    // se não existir, cria automaticamente (visitor)
+    if (!prof) {
+      const insert = await supabase.from('profiles').insert({
+        id: currentUser.id, email, role: 'visitor'
+      });
+      if (!insert.error) {
+        prof = { role: 'visitor' };
+      }
     }
+
+    currentRole = prof?.role || 'visitor';
   } else {
     currentRole = 'visitor';
   }
@@ -153,6 +175,7 @@ async function loadItems(filter = "") {
     `;
     const img = card.querySelector('img');
     img?.addEventListener('click', () => { if (item.photo_url) window.open(item.photo_url, "_blank"); });
+
     if (canWrite()) {
       card.querySelector('.edit-btn')?.addEventListener('click', () => editItem(item.id));
       card.querySelector('.delete-btn')?.addEventListener('click', () => deleteItem(item.id));
@@ -175,18 +198,38 @@ itemForm.addEventListener('submit', async (e) => {
 
   try {
     let photo_url = null;
-    if (file) {
-      file = await compressImage(file, 800, 0.7);
-      const fileName = `${Date.now()}-${file.name}`;
-      await supabase.storage.from('item-photos').upload(fileName, file);
-      photo_url = `${SUPABASE_URL}/storage/v1/object/public/item-photos/${fileName}?v=${Date.now()}`;
-    }
 
     if (editingId) {
+      // edição
+      // se veio foto nova -> sobe e depois remove a antiga
+      if (file) {
+        file = await compressImage(file, 800, 0.7);
+        const fileName = `${Date.now()}-${file.name}`;
+        await supabase.storage.from('item-photos').upload(fileName, file);
+        photo_url = `${SUPABASE_URL}/storage/v1/object/public/item-photos/${fileName}?v=${Date.now()}`;
+
+        // apaga a antiga se existir
+        if (editingPhotoUrl) {
+          const path = pathFromPublicUrl(editingPhotoUrl);
+          if (path) await supabase.storage.from('item-photos').remove([path]);
+        }
+      } else {
+        // sem foto nova -> mantém a atual
+        photo_url = editingPhotoUrl || null;
+      }
+
       await supabase.from('items').update({ name, quantity, location, photo_url }).eq('id', editingId);
       editingId = null;
+      editingPhotoUrl = null;
       submitButton.textContent = 'Cadastrar';
     } else {
+      // novo cadastro
+      if (file) {
+        file = await compressImage(file, 800, 0.7);
+        const fileName = `${Date.now()}-${file.name}`;
+        await supabase.storage.from('item-photos').upload(fileName, file);
+        photo_url = `${SUPABASE_URL}/storage/v1/object/public/item-photos/${fileName}?v=${Date.now()}`;
+      }
       await supabase.from('items').insert([{ name, quantity, location, photo_url }]);
       submitButton.textContent = 'Cadastrar';
     }
@@ -209,14 +252,25 @@ async function editItem(id) {
   document.getElementById('itemName').value = data.name;
   document.getElementById('itemQuantity').value = data.quantity;
   document.getElementById('itemLocation').value = data.location;
+
   editingId = id;
+  editingPhotoUrl = data.photo_url || null;   // <- guarda foto atual
   submitButton.textContent = 'Salvar';
 }
 
 async function deleteItem(id) {
   if (!canWrite()) { openModal('loginModal'); return; }
   if (!confirm('Excluir este item?')) return;
+
+  // busca a foto para remover do storage também
+  const { data: item } = await supabase.from('items').select('photo_url').eq('id', id).single();
   await supabase.from('items').delete().eq('id', id);
+
+  if (item?.photo_url) {
+    const path = pathFromPublicUrl(item.photo_url);
+    if (path) await supabase.storage.from('item-photos').remove([path]);
+  }
+
   await loadItems();
 }
 
@@ -231,7 +285,7 @@ exportButton.addEventListener('click', async () => {
 });
 
 /* =================================================
-   ADMIN (VISUAL + AÇÕES) — só aparece para ADMIN
+   ADMIN
    ================================================= */
 async function loadProfiles() {
   profilesBody.innerHTML = '<tr><td colspan="4">Carregando...</td></tr>';
@@ -283,16 +337,18 @@ async function loadProfiles() {
 
     profilesBody.appendChild(tr);
   });
-}
+});
 
 addUserBtn?.addEventListener('click', async () => {
   if (!isAdmin()) return alert('Apenas administradores.');
   const email = (newUserEmail.value||'').trim().toLowerCase();
   if (!email || !email.includes('@')) return alert('Informe um e-mail válido.');
 
+  // evita duplicar
   const { data: exists } = await supabase.from('profiles').select('id').eq('email', email).maybeSingle();
   if (exists?.id) return alert('E-mail já cadastrado.');
 
+  // admin cria registro (requer policy "Admin insert profiles")
   const { error } = await supabase.from('profiles').insert([{ email, role: 'member' }]);
   if (error) return alert('Erro: '+error.message);
   newUserEmail.value = '';
