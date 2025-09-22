@@ -17,6 +17,7 @@ header {
   align-items: center;
   justify-content: center;
   gap: 12px;
+  position: relative;            /* para posicionar o badge à direita */
 }
 header .logo {
   height: 45px;
@@ -31,6 +32,27 @@ main {
   margin: auto;
 }
 
+/* ===== badge de usuário/role ===== */
+.user-badge{
+  position: absolute;
+  right: 12px;
+  top: 50%; transform: translateY(-50%);
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 10px;
+  border: none; border-radius: 999px;
+  background: rgba(255,255,255,.9); color:#2c3e50;
+  font-weight: 600; font-size: .85rem;
+  box-shadow: 0 1px 4px rgba(0,0,0,.15);
+  cursor: pointer;
+}
+.user-badge .dot{
+  width:10px; height:10px; border-radius:50%; display:inline-block;
+}
+.user-badge .dot.visitor{ background:#95a5a6; }
+.user-badge .dot.member { background:#27ae60; }
+.user-badge .dot.admin  { background:#8e44ad; }
+
+/* Cards / páginas (seu CSS original) */
 .form-container, .list-container, .admin-panel {
   background: white;
   padding: 1.5rem;

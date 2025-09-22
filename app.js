@@ -2,7 +2,7 @@ import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
 
 /* ================================================
-   CONFIG SUPABASE (anon key para leitura pública)
+   CONFIG SUPABASE
    ================================================ */
 const SUPABASE_URL = "https://msvmsaznklubseypxsbs.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1zdm1zYXpua2x1YnNleXB4c2JzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgyMzQ4MzQsImV4cCI6MjA3MzgxMDgzNH0.ZGDD31UVRtwUEpDBkGg6q_jgV8JD_yXqWtuZ_1dprrw";
@@ -22,8 +22,6 @@ const adminPanel     = document.getElementById('adminPanel');
 
 const inputPhotoCamera  = document.getElementById("itemPhotoCamera");
 const inputPhotoGallery = document.getElementById("itemPhotoGallery");
-const btnUseCamera      = document.getElementById("btnUseCamera");
-const btnUseGallery     = document.getElementById("btnUseGallery");
 
 /* FAB & Modais */
 const fabAdmin           = document.getElementById('fabAdmin');
@@ -69,8 +67,8 @@ function storageKeyFromPublicUrl(url) {
     const cut = '/storage/v1/object/public/';
     const idx = u.pathname.indexOf(cut);
     if (idx >= 0) {
-      const after = u.pathname.slice(idx + cut.length); // item-photos/filename
-      return after.split('/').slice(1).join('/');       // remove bucket
+      const after = u.pathname.slice(idx + cut.length);
+      return after.split('/').slice(1).join('/');
     }
     const raw = url.split('/storage/v1/object/public/')[1] || '';
     return raw.split('/').slice(1).join('/');
@@ -102,13 +100,6 @@ async function compressImage(file, maxWidth = 800, quality = 0.7) {
   });
 }
 
-/* Arquivo escolhido */
-function getSelectedFile() {
-  if (inputPhotoCamera.files.length > 0) return inputPhotoCamera.files[0];
-  if (inputPhotoGallery.files.length > 0) return inputPhotoGallery.files[0];
-  return null;
-}
-
 /* ================================================
    AUTH
    ================================================ */
@@ -117,12 +108,11 @@ async function refreshAuth() {
   currentUser = session?.user || null;
 
   if (currentUser?.email) {
-    // busca case-insensitive para evitar zica de caixa/letra
-    const email = currentUser.email;
+    const email = currentUser.email.toLowerCase();
     const { data: prof, error } = await supabase
       .from('profiles')
       .select('email, role, created_at')
-      .ilike('email', email)         // <= chave: não depende de caixa
+      .ilike('email', email)
       .maybeSingle();
 
     if (error) {
@@ -138,9 +128,34 @@ async function refreshAuth() {
   updateAuthUI();
 }
 
+/* Atualiza interface conforme papel */
 function updateAuthUI() {
   visitorHint && (visitorHint.style.display = canWrite() ? 'none' : 'block');
   goAdminBtn && (goAdminBtn.style.display = isAdmin() ? 'block' : 'none');
+
+  // Mostra usuário logado no header
+  let info = document.getElementById('userInfo');
+  if (!info) {
+    info = document.createElement('div');
+    info.id = 'userInfo';
+    info.style.position = 'absolute';
+    info.style.top = '16px';
+    info.style.right = '16px';
+    info.style.fontSize = '0.9rem';
+    info.style.background = '#eef2ff';
+    info.style.color = '#333';
+    info.style.padding = '6px 12px';
+    info.style.borderRadius = '8px';
+    info.style.boxShadow = '0 2px 6px rgba(0,0,0,0.15)';
+    info.style.fontWeight = '600';
+    document.body.appendChild(info);
+  }
+  if (isLoggedIn()) {
+    const roleText = currentRole.toUpperCase();
+    info.textContent = `Logado como: ${currentUser.email} ● ${roleText}`;
+  } else {
+    info.textContent = "VISITOR";
+  }
 }
 
 /* ================================================
@@ -198,7 +213,7 @@ itemForm.addEventListener('submit', async (e) => {
   const name     = document.getElementById('itemName').value.trim();
   const quantity = Number(document.getElementById('itemQuantity').value) || 0;
   const location = document.getElementById('itemLocation').value.trim();
-  let file       = getSelectedFile();
+  let file       = inputPhotoCamera.files[0] || inputPhotoGallery.files[0] || null;
 
   submitButton.disabled = true;
   submitButton.textContent = editingId ? "Salvando..." : "Cadastrando...";
@@ -209,48 +224,21 @@ itemForm.addEventListener('submit', async (e) => {
     if (editingId) {
       if (file) {
         file = await compressImage(file, 800, 0.7);
-        const { data: itemData } = await supabase.from('items').select('photo_url').eq('id', editingId).single();
-        if (itemData?.photo_url) {
-          const key = storageKeyFromPublicUrl(itemData.photo_url);
-          if (key) await supabase.storage.from('item-photos').remove([key]);
-        }
         const fileName = `${Date.now()}-${file.name}`;
         await supabase.storage.from('item-photos').upload(fileName, file);
         photo_url = `${SUPABASE_URL}/storage/v1/object/public/item-photos/${fileName}?v=${Date.now()}`;
-      } else {
-        const { data: itemData } = await supabase.from('items').select('photo_url').eq('id', editingId).single();
-        photo_url = itemData?.photo_url || null;
       }
-
-      const { error: upErr } = await supabase
-        .from('items')
-        .update({ name, quantity, location, photo_url })
-        .eq('id', editingId);
-      if (upErr) throw upErr;
-
+      await supabase.from('items').update({ name, quantity, location, photo_url }).eq('id', editingId);
       editingId = null;
       submitButton.textContent = "Cadastrar";
     } else {
-      const { data: existing } = await supabase.from('items').select('id').eq('name', name).maybeSingle();
-      if (existing) {
-        alert("⚠️ Este item já está cadastrado!");
-        submitButton.disabled = false;
-        submitButton.textContent = "Cadastrar";
-        return;
-      }
-
       if (file) {
         file = await compressImage(file, 800, 0.7);
         const fileName = `${Date.now()}-${file.name}`;
         await supabase.storage.from('item-photos').upload(fileName, file);
         photo_url = `${SUPABASE_URL}/storage/v1/object/public/item-photos/${fileName}?v=${Date.now()}`;
       }
-
-      const { error: insErr } = await supabase
-        .from('items')
-        .insert([{ name, quantity, location, photo_url }]);
-      if (insErr) throw insErr;
-
+      await supabase.from('items').insert([{ name, quantity, location, photo_url }]);
       submitButton.textContent = "Cadastrar";
     }
 
@@ -269,32 +257,21 @@ itemForm.addEventListener('submit', async (e) => {
 async function editItem(id) {
   if (!canWrite()) { openModal('loginModal'); return; }
   const { data, error } = await supabase.from('items').select('*').eq('id', id).single();
-  if (error) { alert('Erro ao carregar item.'); return; }
-  document.getElementById('itemId').value = data.id;
-  document.getElementById('itemName').value = data.name;
-  document.getElementById('itemQuantity').value = data.quantity;
-  document.getElementById('itemLocation').value = data.location;
-  editingId = id;
-  submitButton.textContent = "Salvar";
+  if (!error) {
+    document.getElementById('itemId').value = data.id;
+    document.getElementById('itemName').value = data.name;
+    document.getElementById('itemQuantity').value = data.quantity;
+    document.getElementById('itemLocation').value = data.location;
+    editingId = id;
+    submitButton.textContent = "Salvar";
+  }
 }
 
 async function deleteItem(id) {
   if (!canWrite()) { openModal('loginModal'); return; }
   if (!confirm("Tem certeza que deseja excluir este item?")) return;
-
-  try {
-    const { data: itemData } = await supabase.from('items').select('photo_url').eq('id', id).single();
-    if (itemData?.photo_url) {
-      const key = storageKeyFromPublicUrl(itemData.photo_url);
-      if (key) await supabase.storage.from('item-photos').remove([key]);
-    }
-    const { error } = await supabase.from('items').delete().eq('id', id);
-    if (error) throw error;
-    await loadItems();
-  } catch (err) {
-    console.error('Erro ao excluir:', err);
-    alert('Erro ao excluir. Verifique suas permissões.');
-  }
+  await supabase.from('items').delete().eq('id', id);
+  await loadItems();
 }
 
 /* Busca */
@@ -304,14 +281,12 @@ searchInput.addEventListener("input", (e) => { loadItems(e.target.value.trim());
 exportButton.addEventListener("click", async () => {
   const { data, error } = await supabase.from("items").select("*").order("created_at", { ascending: false });
   if (error || !data || data.length === 0) { alert("Nenhum item para exportar."); return; }
-
   const rows = data.map(item => ({
     Item: item.name,
     Quantidade: item.quantity,
     Local: item.location,
     Foto: item.photo_url || "Sem foto"
   }));
-
   const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Inventário");
@@ -319,80 +294,10 @@ exportButton.addEventListener("click", async () => {
 });
 
 /* ================================================
-   ADMIN (somente admin)
+   LOGIN / LOGOUT / ADMIN
    ================================================ */
-async function loadProfiles() {
-  profilesBody.innerHTML = '<tr><td colspan="4">Carregando...</td></tr>';
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('id, email, role, created_at')
-    .order('created_at', { ascending: false });
-
-  if (error) { profilesBody.innerHTML = `<tr><td colspan="4">Erro: ${error.message}</td></tr>`; return; }
-  if (!data || data.length === 0) { profilesBody.innerHTML = '<tr><td colspan="4">Nenhum perfil.</td></tr>'; return; }
-
-  profilesBody.innerHTML = '';
-  data.forEach(p => {
-    const tr = document.createElement('tr');
-    const badgeClass = p.role === 'admin' ? '' : 'member';
-    tr.innerHTML = `
-      <td>${p.email}</td>
-      <td><span class="role-badge ${badgeClass}">${p.role}</span></td>
-      <td>${fmtDate(p.created_at)}</td>
-      <td class="admin-row-actions">
-        <button class="btn promote" data-id="${p.id}" data-role="${p.role}">Promover a Admin</button>
-        <button class="btn demote"  data-id="${p.id}" data-role="${p.role}">Tornar Membro</button>
-        <button class="btn delete"  data-id="${p.id}">Remover</button>
-      </td>
-    `;
-
-    tr.querySelector('.promote').addEventListener('click', async () => {
-      if (!isAdmin()) return alert('Acesso negado.');
-      if (p.role === 'admin') return alert('Já é admin.');
-      const { error } = await supabase.from('profiles').update({ role: 'admin' }).eq('id', p.id);
-      if (error) return alert('Erro: ' + error.message);
-      loadProfiles();
-    });
-
-    tr.querySelector('.demote').addEventListener('click', async () => {
-      if (!isAdmin()) return alert('Acesso negado.');
-      if (p.role === 'member') return alert('Já é membro.');
-      const { error } = await supabase.from('profiles').update({ role: 'member' }).eq('id', p.id);
-      if (error) return alert('Erro: ' + error.message);
-      loadProfiles();
-    });
-
-    tr.querySelector('.delete').addEventListener('click', async () => {
-      if (!isAdmin()) return alert('Acesso negado.');
-      if (!confirm(`Remover ${p.email}?`)) return;
-      const { error } = await supabase.from('profiles').delete().eq('id', p.id);
-      if (error) return alert('Erro: ' + error.message);
-      loadProfiles();
-    });
-
-    profilesBody.appendChild(tr);
-  });
-}
-
-addUserBtn?.addEventListener('click', async () => {
-  if (!isAdmin()) { alert('Apenas administradores.'); return; }
-  const email = (newUserEmail.value || '').trim().toLowerCase();
-  if (!email || !email.includes('@')) { alert('Informe um e-mail válido.'); return; }
-
-  const { data: exists } = await supabase.from('profiles').select('id').eq('email', email).maybeSingle();
-  if (exists?.id) { alert('Este e-mail já está cadastrado.'); return; }
-
-  const { error } = await supabase.from('profiles').insert([{ email, role: 'member' }]);
-  if (error) { alert('Erro: ' + error.message); return; }
-  newUserEmail.value = '';
-  loadProfiles();
-});
-
-/* ================================================
-   LOGIN / LOGOUT / CONTAS
-   ================================================ */
-fabAdmin.addEventListener('click', () => {
-  if (!isLoggedIn()) { openModal('loginModal'); }
+fabAdmin?.addEventListener('click', () => {
+  if (!isLoggedIn()) openModal('loginModal');
   else {
     accountTitle.textContent = 'Conta';
     accountSubtitle.textContent = `${currentUser.email} • ${currentRole.toUpperCase()}`;
@@ -400,7 +305,7 @@ fabAdmin.addEventListener('click', () => {
   }
 });
 
-loginButton.addEventListener('click', async () => {
+loginButton?.addEventListener('click', async () => {
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
     options: { redirectTo: window.location.origin }
@@ -409,28 +314,23 @@ loginButton.addEventListener('click', async () => {
   else if (data?.url) window.location.href = data.url;
 });
 
-logoutButton.addEventListener('click', async () => {
+logoutButton?.addEventListener('click', async () => {
   await supabase.auth.signOut();
+  currentUser = null;
+  currentRole = 'visitor';
   closeModal('accountModal');
-  await refreshAuth();
+  updateAuthUI();
   await loadItems();
 });
 
-closeModalBtn.addEventListener('click', () => closeModal('loginModal'));
-closeAccountModal.addEventListener('click', () => closeModal('accountModal'));
+closeModalBtn?.addEventListener('click', () => closeModal('loginModal'));
+closeAccountModal?.addEventListener('click', () => closeModal('accountModal'));
 
-goAdminBtn.addEventListener('click', async () => {
+goAdminBtn?.addEventListener('click', async () => {
   if (!isAdmin()) { alert('Acesso negado.'); return; }
   adminPanel.style.display = 'block';
   closeModal('accountModal');
-  await loadProfiles();
 });
-
-/* ================================================
-   BOTÕES DE FOTO
-   ================================================ */
-btnUseCamera?.addEventListener('click', () => inputPhotoCamera.click());
-btnUseGallery?.addEventListener('click', () => inputPhotoGallery.click());
 
 /* ================================================
    INICIALIZAÇÃO
