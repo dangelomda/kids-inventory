@@ -56,20 +56,11 @@ const isAdmin    = () => currentRole === 'admin';
 /* ================================================
    UTILS
    ================================================ */
-function openModal(id) {
-  const el = document.getElementById(id);
-  if (el) el.classList.add('show');
-}
-function closeModal(id) {
-  const el = document.getElementById(id);
-  if (el) el.classList.remove('show');
-}
+function openModal(id) { document.getElementById(id)?.classList.add('show'); }
+function closeModal(id){ document.getElementById(id)?.classList.remove('show'); }
 
 function fmtDate(iso) {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleString();
-  } catch { return iso || ''; }
+  try { return new Date(iso).toLocaleString(); } catch { return iso || ''; }
 }
 
 function storageKeyFromPublicUrl(url) {
@@ -78,19 +69,13 @@ function storageKeyFromPublicUrl(url) {
     const cut = '/storage/v1/object/public/';
     const idx = u.pathname.indexOf(cut);
     if (idx >= 0) {
-      const after = u.pathname.slice(idx + cut.length); // item-photos/filename.jpg
-      const parts = after.split('/');
-      // remove bucket prefix (item-photos/)
-      parts.shift();
-      return parts.join('/');
+      const after = u.pathname.slice(idx + cut.length); // item-photos/filename
+      return after.split('/').slice(1).join('/');       // remove bucket
     }
-    // fallback
     const raw = url.split('/storage/v1/object/public/')[1] || '';
-    return raw.split('/').slice(1).join('/'); // remove bucket
+    return raw.split('/').slice(1).join('/');
   } catch {
-    // última tentativa simples
-    const raw = (url || '').split('/item-photos/')[1] || '';
-    return raw.split('?')[0];
+    return (url || '').split('/item-photos/')[1]?.split('?')[0] || null;
   }
 }
 
@@ -103,13 +88,10 @@ async function compressImage(file, maxWidth = 800, quality = 0.7) {
       const scale = Math.min(1, maxWidth / img.width);
       const w = Math.round(img.width * scale);
       const h = Math.round(img.height * scale);
-
       const canvas = document.createElement('canvas');
       canvas.width = w; canvas.height = h;
-
       const ctx = canvas.getContext('2d');
       ctx.drawImage(img, 0, 0, w, h);
-
       canvas.toBlob(
         (blob) => resolve(new File([blob], file.name.replace(/\.[^.]+$/, '') + ".jpg", { type: "image/jpeg" })),
         "image/jpeg",
@@ -120,7 +102,7 @@ async function compressImage(file, maxWidth = 800, quality = 0.7) {
   });
 }
 
-/* Get arquivo da câmera/galeria */
+/* Arquivo escolhido */
 function getSelectedFile() {
   if (inputPhotoCamera.files.length > 0) return inputPhotoCamera.files[0];
   if (inputPhotoGallery.files.length > 0) return inputPhotoGallery.files[0];
@@ -135,11 +117,12 @@ async function refreshAuth() {
   currentUser = session?.user || null;
 
   if (currentUser?.email) {
-    const email = currentUser.email.toLowerCase();
+    // busca case-insensitive para evitar zica de caixa/letra
+    const email = currentUser.email;
     const { data: prof, error } = await supabase
       .from('profiles')
       .select('email, role, created_at')
-      .eq('email', email)
+      .ilike('email', email)         // <= chave: não depende de caixa
       .maybeSingle();
 
     if (error) {
@@ -155,20 +138,9 @@ async function refreshAuth() {
   updateAuthUI();
 }
 
-/* UI conforme papel */
 function updateAuthUI() {
-  // Hint visitante
-  visitorHint.style.display = canWrite() ? 'none' : 'block';
-
-  // FAB abre modal de conta se logado; caso contrário, login
-  // Botão de admin só aparece na conta se for admin
-  if (isAdmin()) {
-    goAdminBtn.style.display = 'block';
-  } else {
-    goAdminBtn.style.display = 'none';
-  }
-
-  // Não abrimos painel admin automaticamente; só quando usuário clicar
+  visitorHint && (visitorHint.style.display = canWrite() ? 'none' : 'block');
+  goAdminBtn && (goAdminBtn.style.display = isAdmin() ? 'block' : 'none');
 }
 
 /* ================================================
@@ -194,8 +166,8 @@ async function loadItems(filter = "") {
   data.forEach(item => {
     const card = document.createElement('div');
     card.className = 'item-card';
-
     const canCrud = canWrite();
+
     card.innerHTML = `
       <img src="${item.photo_url || ''}" alt="${item.name}" ${item.photo_url ? '' : 'style="display:none"'} />
       <h3>${item.name}</h3>
@@ -208,11 +180,7 @@ async function loadItems(filter = "") {
     `;
 
     const img = card.querySelector('img');
-    if (img) {
-      img.addEventListener('click', () => {
-        if (item.photo_url) window.open(item.photo_url, "_blank");
-      });
-    }
+    img?.addEventListener('click', () => { if (item.photo_url) window.open(item.photo_url, "_blank"); });
 
     if (canCrud) {
       card.querySelector('.edit-btn')?.addEventListener('click', () => editItem(item.id));
@@ -225,10 +193,7 @@ async function loadItems(filter = "") {
 
 itemForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  if (!canWrite()) {
-    openModal('loginModal');
-    return;
-  }
+  if (!canWrite()) { openModal('loginModal'); return; }
 
   const name     = document.getElementById('itemName').value.trim();
   const quantity = Number(document.getElementById('itemQuantity').value) || 0;
@@ -242,16 +207,13 @@ itemForm.addEventListener('submit', async (e) => {
 
   try {
     if (editingId) {
-      // upload novo se tiver arquivo
       if (file) {
         file = await compressImage(file, 800, 0.7);
-
         const { data: itemData } = await supabase.from('items').select('photo_url').eq('id', editingId).single();
         if (itemData?.photo_url) {
-          const key = storageKeyFromPublicUrl(itemData.photo_url); // filename dentro do bucket
+          const key = storageKeyFromPublicUrl(itemData.photo_url);
           if (key) await supabase.storage.from('item-photos').remove([key]);
         }
-
         const fileName = `${Date.now()}-${file.name}`;
         await supabase.storage.from('item-photos').upload(fileName, file);
         photo_url = `${SUPABASE_URL}/storage/v1/object/public/item-photos/${fileName}?v=${Date.now()}`;
@@ -264,16 +226,12 @@ itemForm.addEventListener('submit', async (e) => {
         .from('items')
         .update({ name, quantity, location, photo_url })
         .eq('id', editingId);
-
       if (upErr) throw upErr;
 
       editingId = null;
       submitButton.textContent = "Cadastrar";
     } else {
-      // Evita duplicado por nome
-      const { data: existing } = await supabase
-        .from('items').select('id').eq('name', name).maybeSingle();
-
+      const { data: existing } = await supabase.from('items').select('id').eq('name', name).maybeSingle();
       if (existing) {
         alert("⚠️ Este item já está cadastrado!");
         submitButton.disabled = false;
@@ -291,8 +249,8 @@ itemForm.addEventListener('submit', async (e) => {
       const { error: insErr } = await supabase
         .from('items')
         .insert([{ name, quantity, location, photo_url }]);
-
       if (insErr) throw insErr;
+
       submitButton.textContent = "Cadastrar";
     }
 
@@ -310,12 +268,10 @@ itemForm.addEventListener('submit', async (e) => {
 
 async function editItem(id) {
   if (!canWrite()) { openModal('loginModal'); return; }
-
   const { data, error } = await supabase.from('items').select('*').eq('id', id).single();
   if (error) { alert('Erro ao carregar item.'); return; }
-
-  document.getElementById('itemId').value     = data.id;
-  document.getElementById('itemName').value   = data.name;
+  document.getElementById('itemId').value = data.id;
+  document.getElementById('itemName').value = data.name;
   document.getElementById('itemQuantity').value = data.quantity;
   document.getElementById('itemLocation').value = data.location;
   editingId = id;
@@ -341,19 +297,13 @@ async function deleteItem(id) {
   }
 }
 
-/* Busca em tempo real */
-searchInput.addEventListener("input", (e) => {
-  const value = e.target.value.trim();
-  loadItems(value);
-});
+/* Busca */
+searchInput.addEventListener("input", (e) => { loadItems(e.target.value.trim()); });
 
 /* Exportar Excel */
 exportButton.addEventListener("click", async () => {
   const { data, error } = await supabase.from("items").select("*").order("created_at", { ascending: false });
-  if (error || !data || data.length === 0) {
-    alert("Nenhum item para exportar.");
-    return;
-  }
+  if (error || !data || data.length === 0) { alert("Nenhum item para exportar."); return; }
 
   const rows = data.map(item => ({
     Item: item.name,
@@ -362,10 +312,10 @@ exportButton.addEventListener("click", async () => {
     Foto: item.photo_url || "Sem foto"
   }));
 
-  const worksheet = XLSX.utils.json_to_sheet(rows);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, "Inventário");
-  XLSX.writeFile(workbook, "inventario_kids.xlsx");
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Inventário");
+  XLSX.writeFile(wb, "inventario_kids.xlsx");
 });
 
 /* ================================================
@@ -378,20 +328,12 @@ async function loadProfiles() {
     .select('id, email, role, created_at')
     .order('created_at', { ascending: false });
 
-  if (error) {
-    profilesBody.innerHTML = `<tr><td colspan="4">Erro: ${error.message}</td></tr>`;
-    return;
-  }
-
-  if (!data || data.length === 0) {
-    profilesBody.innerHTML = '<tr><td colspan="4">Nenhum perfil.</td></tr>';
-    return;
-  }
+  if (error) { profilesBody.innerHTML = `<tr><td colspan="4">Erro: ${error.message}</td></tr>`; return; }
+  if (!data || data.length === 0) { profilesBody.innerHTML = '<tr><td colspan="4">Nenhum perfil.</td></tr>'; return; }
 
   profilesBody.innerHTML = '';
   data.forEach(p => {
     const tr = document.createElement('tr');
-
     const badgeClass = p.role === 'admin' ? '' : 'member';
     tr.innerHTML = `
       <td>${p.email}</td>
@@ -435,10 +377,8 @@ async function loadProfiles() {
 addUserBtn?.addEventListener('click', async () => {
   if (!isAdmin()) { alert('Apenas administradores.'); return; }
   const email = (newUserEmail.value || '').trim().toLowerCase();
-  if (!email || !email.includes('@')) {
-    alert('Informe um e-mail válido.'); return;
-  }
-  // Insere como membro (se já existir, ignora)
+  if (!email || !email.includes('@')) { alert('Informe um e-mail válido.'); return; }
+
   const { data: exists } = await supabase.from('profiles').select('id').eq('email', email).maybeSingle();
   if (exists?.id) { alert('Este e-mail já está cadastrado.'); return; }
 
@@ -452,9 +392,8 @@ addUserBtn?.addEventListener('click', async () => {
    LOGIN / LOGOUT / CONTAS
    ================================================ */
 fabAdmin.addEventListener('click', () => {
-  if (!isLoggedIn()) {
-    openModal('loginModal');
-  } else {
+  if (!isLoggedIn()) { openModal('loginModal'); }
+  else {
     accountTitle.textContent = 'Conta';
     accountSubtitle.textContent = `${currentUser.email} • ${currentRole.toUpperCase()}`;
     openModal('accountModal');
@@ -462,18 +401,12 @@ fabAdmin.addEventListener('click', () => {
 });
 
 loginButton.addEventListener('click', async () => {
-  // Redireciona para login Google
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
-    options: {
-      redirectTo: window.location.origin
-    }
+    options: { redirectTo: window.location.origin }
   });
-  if (error) {
-    alert('Erro no login: ' + error.message);
-  } else if (data?.url) {
-    window.location.href = data.url;
-  }
+  if (error) alert('Erro no login: ' + error.message);
+  else if (data?.url) window.location.href = data.url;
 });
 
 logoutButton.addEventListener('click', async () => {
@@ -496,8 +429,8 @@ goAdminBtn.addEventListener('click', async () => {
 /* ================================================
    BOTÕES DE FOTO
    ================================================ */
-btnUseCamera.addEventListener('click', () => inputPhotoCamera.click());
-btnUseGallery.addEventListener('click', () => inputPhotoGallery.click());
+btnUseCamera?.addEventListener('click', () => inputPhotoCamera.click());
+btnUseGallery?.addEventListener('click', () => inputPhotoGallery.click());
 
 /* ================================================
    INICIALIZAÇÃO
@@ -505,8 +438,6 @@ btnUseGallery.addEventListener('click', () => inputPhotoGallery.click());
 document.addEventListener('DOMContentLoaded', async () => {
   await refreshAuth();
   await loadItems();
-
-  // Atualiza papel se a sessão mudar (ex.: retorno do OAuth)
   supabase.auth.onAuthStateChange(async () => {
     await refreshAuth();
     await loadItems();
