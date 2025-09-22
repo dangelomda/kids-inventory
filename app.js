@@ -255,7 +255,6 @@ async function deleteItem(item) {
     if (item.photo_url) {
       const path = pathFromPublicUrl(item.photo_url);
       if (path) {
-        // CORREÇÃO: Usar um array de caminhos para o método .remove()
         await supabase.storage.from('item-photos').remove([path]);
       }
     }
