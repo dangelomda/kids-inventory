@@ -118,7 +118,7 @@ async function refreshAuth() {
     const email = currentUser.email.toLowerCase();
 
     // tenta carregar o perfil
-    let { data: prof, error } = await supabase
+    let { data: prof } = await supabase
       .from('profiles')
       .select('id, email, role, created_at')
       .ilike('email', email)
@@ -201,20 +201,17 @@ itemForm.addEventListener('submit', async (e) => {
 
     if (editingId) {
       // edição
-      // se veio foto nova -> sobe e depois remove a antiga
       if (file) {
         file = await compressImage(file, 800, 0.7);
         const fileName = `${Date.now()}-${file.name}`;
         await supabase.storage.from('item-photos').upload(fileName, file);
         photo_url = `${SUPABASE_URL}/storage/v1/object/public/item-photos/${fileName}?v=${Date.now()}`;
 
-        // apaga a antiga se existir
         if (editingPhotoUrl) {
           const path = pathFromPublicUrl(editingPhotoUrl);
           if (path) await supabase.storage.from('item-photos').remove([path]);
         }
       } else {
-        // sem foto nova -> mantém a atual
         photo_url = editingPhotoUrl || null;
       }
 
@@ -223,7 +220,6 @@ itemForm.addEventListener('submit', async (e) => {
       editingPhotoUrl = null;
       submitButton.textContent = 'Cadastrar';
     } else {
-      // novo cadastro
       if (file) {
         file = await compressImage(file, 800, 0.7);
         const fileName = `${Date.now()}-${file.name}`;
@@ -254,7 +250,7 @@ async function editItem(id) {
   document.getElementById('itemLocation').value = data.location;
 
   editingId = id;
-  editingPhotoUrl = data.photo_url || null;   // <- guarda foto atual
+  editingPhotoUrl = data.photo_url || null;
   submitButton.textContent = 'Salvar';
 }
 
@@ -262,7 +258,6 @@ async function deleteItem(id) {
   if (!canWrite()) { openModal('loginModal'); return; }
   if (!confirm('Excluir este item?')) return;
 
-  // busca a foto para remover do storage também
   const { data: item } = await supabase.from('items').select('photo_url').eq('id', id).single();
   await supabase.from('items').delete().eq('id', id);
 
@@ -337,18 +332,16 @@ async function loadProfiles() {
 
     profilesBody.appendChild(tr);
   });
-});
+}
 
 addUserBtn?.addEventListener('click', async () => {
   if (!isAdmin()) return alert('Apenas administradores.');
   const email = (newUserEmail.value||'').trim().toLowerCase();
   if (!email || !email.includes('@')) return alert('Informe um e-mail válido.');
 
-  // evita duplicar
   const { data: exists } = await supabase.from('profiles').select('id').eq('email', email).maybeSingle();
   if (exists?.id) return alert('E-mail já cadastrado.');
 
-  // admin cria registro (requer policy "Admin insert profiles")
   const { error } = await supabase.from('profiles').insert([{ email, role: 'member' }]);
   if (error) return alert('Erro: '+error.message);
   newUserEmail.value = '';
