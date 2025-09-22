@@ -4,7 +4,7 @@ import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
 
 /* =================================================
-   CONFIGURAÇÃO SUPABASE
+   CONFIGURAÇÃO SUPABASE (CHAVE CORRIGIDA)
    ================================================= */
 const SUPABASE_URL = "https://msvmsaznklubseypxsbs.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1zdm1zYXpua2x1YnNleXB4c2JzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgyMzQ4MzQsImV4cCI6MjA3MzgxMDgzNH0.ZGDD31UVRtwUEpDBkGg6q_jgV8JD_yXqWtuZ_1dprrw";
@@ -100,12 +100,12 @@ function pathFromPublicUrl(url) {
     const parts = u.pathname.split('/');
     const idx = parts.indexOf('item-photos');
     if (idx >= 0 && idx < parts.length - 1) return parts.slice(idx + 1).join('/');
-  } catch (e) { /* ignore */ }
+  } catch (e) { console.error("Erro ao extrair caminho da URL:", e); }
   return null;
 }
 
 /* =================================================
-   AUTENTICAÇÃO (CORRIGIDO: APENAS PARA CONVIDADOS)
+   AUTENTICAÇÃO (APENAS PARA CONVIDADOS)
    ================================================= */
 async function refreshAuth() {
   const { data: { session } } = await supabase.auth.getSession();
@@ -116,7 +116,6 @@ async function refreshAuth() {
 
   if (currentUser?.email) {
     const email = canon(currentUser.email);
-
     const { data: prof, error } = await supabase
       .from('profiles')
       .select('id, role, active')
@@ -143,7 +142,7 @@ function updateAuthUI() {
 }
 
 /* =================================================
-   ITENS (CRUD CORRIGIDO E ROBUSTO)
+   ITENS (CRUD ROBUSTO)
    ================================================= */
 async function loadItems(filter = "") {
   let q = supabase.from('items').select('*').order('created_at', { ascending: false });
