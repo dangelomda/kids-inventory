@@ -1,5 +1,5 @@
-// app.js — Inventário Kids (invite-only + roles + CRUD + fotos + admin)
-// ---------------------------------------------------------------
+// app.js — Inventário Kids (invite-only + active + roles + CRUD + fotos + admin)
+// -----------------------------------------------------------------------------
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
 
@@ -26,10 +26,11 @@ const inputPhotoGallery = document.getElementById("itemPhotoGallery");
 const btnUseCamera  = document.getElementById("btnUseCamera");
 const btnUseGallery = document.getElementById("btnUseGallery");
 
-/* Badge / Modais */
+/* Badge / Modais / FAB */
 const userBadge     = document.getElementById('userBadge');
 const userBadgeText = document.getElementById('userBadgeText');
 const userBadgeDot  = document.getElementById('userBadgeDot');
+
 const fabAdmin          = document.getElementById('fabAdmin');
 const loginModal        = document.getElementById('loginModal');
 const accountModal      = document.getElementById('accountModal');
@@ -50,10 +51,9 @@ const newUserEmail = document.getElementById('newUserEmail');
    ESTADO
    ================================================= */
 let editingId = null;
-let editingPhotoUrl = null;
 let currentUser = null;
 let currentRole = 'visitor';
-let currentActive = false; // só membro/admin com active=TRUE podem escrever
+let currentActive = false; // só escreve se active = TRUE
 
 const isLoggedIn = () => !!currentUser;
 const canWrite   = () => currentActive && ['member','admin'].includes(currentRole);
@@ -70,8 +70,7 @@ function setBadge(email, role, active) {
   const r = (role || 'visitor').toLowerCase();
   const tag = active ? r.toUpperCase() : 'VISITOR';
   userBadgeText.textContent = email ? `${email} • ${tag}` : 'VISITOR';
-  userBadgeDot.classList.remove('visitor','member','admin');
-  userBadgeDot.classList.add(active ? r : 'visitor');
+  userBadgeDot.className = `dot ${active ? r : 'visitor'}`;
 }
 
 async function compressImage(file, maxWidth = 800, quality = 0.7) {
@@ -87,7 +86,7 @@ async function compressImage(file, maxWidth = 800, quality = 0.7) {
       const ctx = canvas.getContext('2d');
       ctx.drawImage(img, 0, 0, w, h);
       canvas.toBlob(
-        (blob) => resolve(new File([blob], file.name.replace(/\.[^.]+$/, '') + ".jpg", { type: "image/jpeg" })),
+        (blob) => resolve(new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: "image/jpeg" })),
         "image/jpeg", quality
       );
     };
@@ -95,34 +94,33 @@ async function compressImage(file, maxWidth = 800, quality = 0.7) {
   });
 }
 
+/* extrai o caminho relativo dentro do bucket item-photos */
 function pathFromPublicUrl(url) {
+  if (!url) return null;
   try {
     const u = new URL(url);
-    const marker = '/object/public/';
-    const i = u.pathname.indexOf(marker);
-    if (i === -1) return null;
-    let tail = u.pathname.slice(i + marker.length); // ex: item-photos/xxx.jpg
-    if (!tail.startsWith('item-photos/')) return null;
-    return tail.replace('item-photos/', '');        // ex: xxx.jpg
-  } catch {
-    return null;
-  }
+    const parts = u.pathname.split('/');
+    const idx = parts.indexOf('item-photos');
+    if (idx >= 0 && idx < parts.length - 1) return parts.slice(idx + 1).join('/');
+  } catch (e) { /* ignore */ }
+  return null;
 }
 
 /* =================================================
-   AUTH  (INVITE-ONLY: sem insert automático)
+   AUTH — invite-only (NÃO cria perfil no login)
    ================================================= */
 async function refreshAuth() {
   const { data: { session } } = await supabase.auth.getSession();
   currentUser = session?.user || null;
 
+  // padrão
   currentRole = 'visitor';
   currentActive = false;
 
   if (currentUser?.email) {
     const email = canon(currentUser.email);
 
-    // 1) Procurar convite existente por e-mail (NÃO INSERE AUTOMÁTICO)
+    // procura convite
     const { data: prof, error } = await supabase
       .from('profiles')
       .select('id, email, role, active')
@@ -130,14 +128,11 @@ async function refreshAuth() {
       .maybeSingle();
 
     if (!error && prof) {
-      // 2) Se foi convidado e ainda não tem id, faz o bind do primeiro login
+      // se convidado mas ainda sem id, faz só o bind do primeiro login
       if (!prof.id) {
-        await supabase.from('profiles')
-          .update({ id: currentUser.id })
-          .eq('email', email);
+        await supabase.from('profiles').update({ id: currentUser.id }).eq('email', email);
       }
-      // 3) Só aplica permissão se active=TRUE
-      currentRole = prof.role || 'visitor';
+      currentRole   = prof.role || 'visitor';
       currentActive = !!prof.active;
     }
   }
@@ -145,16 +140,13 @@ async function refreshAuth() {
 }
 
 function updateAuthUI() {
-  // aviso de somente leitura
   if (visitorHint) visitorHint.style.display = canWrite() ? 'none' : 'block';
-  // botão painel admin
   if (goAdminBtn)  goAdminBtn.style.display  = isAdmin() ? 'block' : 'none';
-  // badge
   setBadge(currentUser?.email || null, currentRole, currentActive);
 }
 
 /* =================================================
-   ITENS (CRUD + fotos)
+   ITENS (CRUD + fotos sem duplicar)
    ================================================= */
 async function loadItems(filter = "") {
   let q = supabase.from('items').select('*').order('created_at', { ascending: false });
@@ -162,7 +154,7 @@ async function loadItems(filter = "") {
   const { data, error } = await q;
 
   itemList.innerHTML = '';
-  if (error) { itemList.innerHTML = '<p>Erro ao carregar itens.</p>'; return; }
+  if (error) { itemList.innerHTML = `<p>Erro ao carregar itens: ${error.message}</p>`; return; }
   if (!data?.length) { itemList.innerHTML = '<p>Nenhum item encontrado.</p>'; return; }
 
   data.forEach(item => {
@@ -174,21 +166,25 @@ async function loadItems(filter = "") {
       <p><b>Qtd:</b> ${item.quantity}</p>
       <p><b>Local:</b> ${item.location}</p>
       <div class="actions" style="${canWrite() ? '' : 'display:none'}">
-        <button class="edit-btn" data-id="${item.id}">✏️ Editar</button>
-        <button class="delete-btn" data-id="${item.id}">🗑️ Excluir</button>
+        <button class="edit-btn">✏️ Editar</button>
+        <button class="delete-btn">🗑️ Excluir</button>
       </div>
     `;
-    const img = card.querySelector('img');
-    img?.addEventListener('click', () => { if (item.photo_url) window.open(item.photo_url, "_blank"); });
+
+    card.querySelector('img')?.addEventListener('click', () => {
+      if (item.photo_url) window.open(item.photo_url, "_blank");
+    });
 
     if (canWrite()) {
-      card.querySelector('.edit-btn')?.addEventListener('click', () => editItem(item.id));
-      card.querySelector('.delete-btn')?.addEventListener('click', () => deleteItem(item.id));
+      card.querySelector('.edit-btn')?.addEventListener('click', () => editItem(item));
+      card.querySelector('.delete-btn')?.addEventListener('click', () => deleteItem(item));
     }
+
     itemList.appendChild(card);
   });
 }
 
+// envio do formulário (criar/editar)
 itemForm?.addEventListener('submit', async (e) => {
   e.preventDefault();
   if (!canWrite()) { openModal('loginModal'); return; }
@@ -196,95 +192,103 @@ itemForm?.addEventListener('submit', async (e) => {
   const name = document.getElementById('itemName').value.trim();
   const quantity = Number(document.getElementById('itemQuantity').value) || 0;
   const location = document.getElementById('itemLocation').value.trim();
-  let file = inputPhotoCamera.files[0] || inputPhotoGallery.files[0] || null;
+  const file = inputPhotoCamera.files[0] || inputPhotoGallery.files[0] || null;
+
+  // URL da foto atual fica guardada no dataset do #itemId
+  const itemIdInput = document.getElementById('itemId');
+  const currentPhotoUrl = itemIdInput?.dataset.currentPhotoUrl || null;
 
   submitButton.disabled = true;
-  submitButton.textContent = editingId ? 'Salvando...' : 'Cadastrando...';
+  const isEdit = !!editingId;
+  const originalText = isEdit ? 'Salvar' : 'Cadastrar';
+  submitButton.textContent = isEdit ? 'Salvando...' : 'Cadastrando...';
 
   try {
-    let photo_url = null;
-    if (editingId) {
-      if (file) {
-        file = await compressImage(file, 800, 0.7);
-        const fileName = `${Date.now()}-${file.name}`;
-        await supabase.storage.from('item-photos').upload(fileName, file);
-        photo_url = `${SUPABASE_URL}/storage/v1/object/public/item-photos/${fileName}?v=${Date.now()}`;
+    let photo_url = currentPhotoUrl;
 
-        // remove a antiga se havia
-        if (editingPhotoUrl) {
-          const path = pathFromPublicUrl(editingPhotoUrl);
-          if (path) await supabase.storage.from('item-photos').remove([path]);
-        }
-      } else {
-        photo_url = editingPhotoUrl || null;
-      }
-
-      await supabase.from('items').update({ name, quantity, location, photo_url }).eq('id', editingId);
-      editingId = null;
-      editingPhotoUrl = null;
-      submitButton.textContent = 'Cadastrar';
-    } else {
-      if (file) {
-        file = await compressImage(file, 800, 0.7);
-        const fileName = `${Date.now()}-${file.name}`;
-        await supabase.storage.from('item-photos').upload(fileName, file);
-        photo_url = `${SUPABASE_URL}/storage/v1/object/public/item-photos/${fileName}?v=${Date.now()}`;
-      }
-      await supabase.from('items').insert([{ name, quantity, location, photo_url }]);
-      submitButton.textContent = 'Cadastrar';
+    if (file) {
+      const compressed = await compressImage(file, 800, 0.7);
+      const fileName = `${Date.now()}-${compressed.name}`;
+      const { data: up, error: upErr } = await supabase.storage.from('item-photos').upload(fileName, compressed);
+      if (upErr) throw upErr;
+      photo_url = `${SUPABASE_URL}/storage/v1/object/public/item-photos/${up.path}`;
     }
 
-    itemForm.reset();
-    inputPhotoCamera.value = ""; inputPhotoGallery.value = "";
+    const payload = { name, quantity, location, photo_url };
+
+    if (isEdit) {
+      const { error: updErr } = await supabase.from('items').update(payload).eq('id', editingId);
+      if (updErr) throw updErr;
+
+      // apaga a foto antiga apenas DEPOIS de atualizar com sucesso
+      if (file && currentPhotoUrl) {
+        const oldPath = pathFromPublicUrl(currentPhotoUrl);
+        if (oldPath) await supabase.storage.from('item-photos').remove([oldPath]);
+      }
+    } else {
+      const { error: insErr } = await supabase.from('items').insert([payload]);
+      if (insErr) throw insErr;
+    }
+
     await loadItems();
+    itemForm.reset();
   } catch (err) {
-    console.error('Erro no cadastro/edição:', err);
-    alert('Erro ao salvar. Verifique suas permissões.');
+    console.error('Erro ao salvar item:', err);
+    alert(`Erro ao salvar: ${err.message}`);
   } finally {
+    // reset de estado
+    editingId = null;
+    if (itemIdInput) itemIdInput.dataset.currentPhotoUrl = '';
     submitButton.disabled = false;
+    submitButton.textContent = 'Cadastrar';
+    inputPhotoCamera.value = "";
+    inputPhotoGallery.value = "";
   }
 });
 
-async function editItem(id) {
+function editItem(item) {
   if (!canWrite()) { openModal('loginModal'); return; }
-  const { data } = await supabase.from('items').select('*').eq('id', id).single();
-  document.getElementById('itemId').value = data.id;
-  document.getElementById('itemName').value = data.name;
-  document.getElementById('itemQuantity').value = data.quantity;
-  document.getElementById('itemLocation').value = data.location;
-
-  editingId = id;
-  editingPhotoUrl = data.photo_url || null;
-  submitButton.textContent = 'Salvar';
+  document.getElementById('itemId').value = item.id;
+  document.getElementById('itemName').value = item.name;
+  document.getElementById('itemQuantity').value = item.quantity;
+  document.getElementById('itemLocation').value = item.location;
+  document.getElementById('itemId').dataset.currentPhotoUrl = item.photo_url || '';
+  editingId = item.id;
+  submitButton.textContent = "Salvar";
+  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-async function deleteItem(id) {
+async function deleteItem(item) {
   if (!canWrite()) { openModal('loginModal'); return; }
-  if (!confirm('Excluir este item?')) return;
+  if (!confirm(`Excluir "${item.name}"?`)) return;
+  try {
+    const { error: delErr } = await supabase.from('items').delete().eq('id', item.id);
+    if (delErr) throw delErr;
 
-  const { data: item } = await supabase.from('items').select('photo_url').eq('id', id).single();
-  await supabase.from('items').delete().eq('id', id);
-
-  if (item?.photo_url) {
-    const path = pathFromPublicUrl(item.photo_url);
-    if (path) await supabase.storage.from('item-photos').remove([path]);
+    if (item.photo_url) {
+      const path = pathFromPublicUrl(item.photo_url);
+      if (path) await supabase.storage.from('item-photos').remove([path]);
+    }
+    await loadItems();
+  } catch (err) {
+    console.error("Erro ao deletar:", err);
+    alert(`Não foi possível deletar: ${err.message}`);
   }
-
-  await loadItems();
 }
 
 /* Busca & Export */
 searchInput?.addEventListener('input', (e)=> loadItems(e.target.value.trim()));
 exportButton?.addEventListener('click', async () => {
   const { data, error } = await supabase.from('items').select('*').order('created_at', { ascending: false });
-  if (error || !data?.length) return alert('Nenhum item para exportar.');
+  if (error) return alert('Erro ao exportar.');
+  if (!data?.length) return alert('Nenhum item para exportar.');
   const rows = data.map(x => ({ Item:x.name, Quantidade:x.quantity, Local:x.location, Foto:x.photo_url||'Sem foto' }));
   const ws = XLSX.utils.json_to_sheet(rows), wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Inventário'); XLSX.writeFile(wb, 'inventario_kids.xlsx');
 });
 
 /* =================================================
-   ADMIN (convidar/promover/ativar/desativar/remover)
+   ADMIN (convidar / ativar / promover / remover)
    ================================================= */
 async function loadProfiles() {
   profilesBody.innerHTML = '<tr><td colspan="5">Carregando...</td></tr>';
@@ -347,9 +351,9 @@ addUserBtn?.addEventListener('click', async () => {
   const email = canon(newUserEmail.value);
   if (!email || !email.includes('@')) return alert('Informe um e-mail válido.');
 
-  // convite explícito (unique por email no banco)
+  // convite explícito (unique por email na DB)
   const { error } = await supabase.from('profiles').insert([{ email, role: 'member', active: true }]);
-  if (error && !String(error.message).includes('duplicate')) {
+  if (error && !String(error.message).toLowerCase().includes('duplicate')) {
     alert('Erro: ' + error.message);
     return;
   }
@@ -360,16 +364,17 @@ addUserBtn?.addEventListener('click', async () => {
 /* =================================================
    LOGIN / LOGOUT / MODAIS
    ================================================= */
-fabAdmin?.addEventListener('click', () => {
-  if (!isLoggedIn()) openModal('loginModal');
-  else {
+const handleAuthClick = () => {
+  if (!isLoggedIn()) {
+    openModal('loginModal');
+  } else {
     accountTitle.textContent   = 'Conta';
     accountSubtitle.textContent = `${currentUser.email} • ${(currentActive ? currentRole.toUpperCase() : 'VISITOR')}`;
     openModal('accountModal');
   }
-});
-
-userBadge?.addEventListener('click', () => fabAdmin?.click());
+};
+fabAdmin?.addEventListener('click', handleAuthClick);
+userBadge?.addEventListener('click', handleAuthClick);
 
 loginButton?.addEventListener('click', async () => {
   const { data, error } = await supabase.auth.signInWithOAuth({
@@ -381,7 +386,7 @@ loginButton?.addEventListener('click', async () => {
 });
 
 logoutButton?.addEventListener('click', async () => {
-  await supabase.auth.signOut();      // <-- LOGOUT FUNCIONANDO
+  await supabase.auth.signOut();  // logout efetivo
   currentUser = null;
   currentRole = 'visitor';
   currentActive = false;
@@ -398,18 +403,22 @@ goAdminBtn?.addEventListener('click', async () => {
   adminPanel.style.display = 'block';
   closeModal('accountModal');
   await loadProfiles();
+  window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
 });
 
 /* =================================================
    INICIALIZAÇÃO
    ================================================= */
 document.addEventListener('DOMContentLoaded', async () => {
+  // Botões de foto (UX mobile)
+  btnUseCamera?.addEventListener('click', () => inputPhotoCamera.click());
+  btnUseGallery?.addEventListener('click', () => inputPhotoGallery.click());
+
   await refreshAuth();
   await loadItems();
+
   supabase.auth.onAuthStateChange(async () => {
     await refreshAuth();
     await loadItems();
   });
 });
-btnUseCamera?.addEventListener('click', ()=> document.getElementById("itemPhotoCamera").click());
-btnUseGallery?.addEventListener('click', ()=> document.getElementById("itemPhotoGallery").click());
