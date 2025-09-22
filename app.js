@@ -1,48 +1,357 @@
-// COLE ESTA VERSÃO COMPLETA DA FUNÇÃO NO LUGAR DA SUA refreshAuth ATUAL
+import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
+import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
+
+/* =================================================
+   SUPABASE
+   ================================================= */
+const SUPABASE_URL = "https://msvmsaznklubseypxsbs.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1zdm1zYXpua2x1YnNleXB4c2JzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgyMzQ4MzQsImV4cCI6MjA3MzgxMDgzNH0.ZGDD31UVRtwUEpDBkGg6q_jgV8JD_yXqWtuZ_1dprrw";
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+/* =================================================
+   DOM
+   ================================================= */
+const itemForm  = document.getElementById('itemForm');
+const itemList  = document.getElementById('itemList');
+const submitButton = document.getElementById('submitButton');
+const searchInput  = document.getElementById('searchInput');
+const exportButton = document.getElementById('exportButton');
+const visitorHint  = document.getElementById('visitorHint');
+const adminPanel   = document.getElementById('adminPanel');
+
+const inputPhotoCamera  = document.getElementById("itemPhotoCamera");
+const inputPhotoGallery = document.getElementById("itemPhotoGallery");
+const btnUseCamera  = document.getElementById("btnUseCamera");
+const btnUseGallery = document.getElementById("btnUseGallery");
+
+/* Badge no header (oficial) */
+const userBadge     = document.getElementById('userBadge');
+const userBadgeText = document.getElementById('userBadgeText');
+const userBadgeDot  = document.getElementById('userBadgeDot');
+
+/* Modais */
+const fabAdmin          = document.getElementById('fabAdmin');
+const loginModal        = document.getElementById('loginModal');
+const accountModal      = document.getElementById('accountModal');
+const loginButton       = document.getElementById('loginButton');
+const closeModalBtn     = document.getElementById('closeModal');
+const logoutButton      = document.getElementById('logoutButton');
+const closeAccountModal = document.getElementById('closeAccountModal');
+const accountTitle      = document.getElementById('accountTitle');
+const accountSubtitle   = document.getElementById('accountSubtitle');
+const goAdminBtn        = document.getElementById('goAdminBtn');
+
+/* Painel Admin */
+const profilesBody = document.getElementById('profilesBody');
+const addUserBtn   = document.getElementById('addUserBtn');
+const newUserEmail = document.getElementById('newUserEmail');
+
+/* =================================================
+   ESTADO
+   ================================================= */
+let editingId = null;
+let currentUser = null;
+let currentRole = 'visitor';
+
+const isLoggedIn = () => !!currentUser;
+const canWrite   = () => ['member','admin'].includes(currentRole);
+const isAdmin    = () => currentRole === 'admin';
+
+/* =================================================
+   UTILS
+   ================================================= */
+const openModal  = (id) => document.getElementById(id)?.classList.add('show');
+const closeModal = (id) => document.getElementById(id)?.classList.remove('show');
+
+function setBadge(email, role) {
+  const r = (role || 'visitor').toLowerCase();
+  userBadgeText.textContent = email ? `Logado como: ${email} • ${r.toUpperCase()}` : 'VISITOR';
+  userBadgeDot.classList.remove('visitor','member','admin');
+  userBadgeDot.classList.add(r);
+}
+
+/* Imagem: compressão simples */
+async function compressImage(file, maxWidth = 800, quality = 0.7) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.src = URL.createObjectURL(file);
+    img.onload = () => {
+      const scale = Math.min(1, maxWidth / img.width);
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      canvas.toBlob(
+        (blob) => resolve(new File([blob], file.name.replace(/\.[^.]+$/, '') + ".jpg", { type: "image/jpeg" })),
+        "image/jpeg", quality
+      );
+    };
+    img.onerror = reject;
+  });
+}
+
+/* =================================================
+   AUTH
+   ================================================= */
 async function refreshAuth() {
-  console.log("1. Iniciando a verificação de autenticação...");
-  const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-
-  if (sessionError) {
-    console.error("Erro grave ao buscar a sessão:", sessionError);
-    return;
-  }
-
-  console.log("2. Sessão do Supabase:", session);
+  const { data: { session } } = await supabase.auth.getSession();
   currentUser = session?.user || null;
 
   if (currentUser?.email) {
-    const email = currentUser.email;
-    console.log("3. Usuário logado encontrado. Email:", email);
-
-    console.log("4. Buscando perfil na tabela 'profiles' para este email...");
+    const email = currentUser.email.toLowerCase();
     const { data: prof, error } = await supabase
       .from('profiles')
       .select('email, role, created_at')
       .ilike('email', email)
       .maybeSingle();
 
-    // =================================================================
-    // ESTE É O PONTO MAIS IMPORTANTE DO DIAGNÓSTICO
-    console.log("5. Resultado da busca pelo perfil:", { data: prof, error: error });
-    // =================================================================
-
     if (error) {
-      console.error('-> Aconteceu um ERRO de banco de dados ao buscar o perfil. Verifique as políticas de RLS da tabela "profiles"!', error.message);
+      console.warn('Erro ao carregar perfil:', error.message);
       currentRole = 'visitor';
-    } else if (prof) {
-      currentRole = prof.role;
-      console.log(`-> SUCESSO! Perfil encontrado! Função definida como: '${currentRole}'`);
     } else {
-      currentRole = 'visitor';
-      console.warn(`-> AVISO: Nenhum perfil encontrado para o email '${email}'. Verifique se o email está cadastrado corretamente na tabela. Função definida como: '${currentRole}'`);
+      currentRole = prof?.role || 'visitor';
     }
-
   } else {
     currentRole = 'visitor';
-    console.log("3. Nenhum usuário logado. Função definida como: 'visitor'");
   }
 
-  console.log("6. Função final do usuário para a interface:", currentRole.toUpperCase());
   updateAuthUI();
 }
+
+function updateAuthUI() {
+  visitorHint.style.display = canWrite() ? 'none' : 'block';
+  goAdminBtn.style.display  = isAdmin() ? 'block' : 'none';
+  setBadge(currentUser?.email || null, currentRole);
+}
+
+/* =================================================
+   ITENS
+   ================================================= */
+async function loadItems(filter = "") {
+  let q = supabase.from('items').select('*').order('created_at', { ascending: false });
+  if (filter) q = q.ilike('name', `%${filter}%`);
+  const { data, error } = await q;
+
+  itemList.innerHTML = '';
+  if (error) { itemList.innerHTML = '<p>Erro ao carregar itens.</p>'; return; }
+  if (!data?.length) { itemList.innerHTML = '<p>Nenhum item encontrado.</p>'; return; }
+
+  data.forEach(item => {
+    const card = document.createElement('div');
+    card.className = 'item-card';
+    card.innerHTML = `
+      <img src="${item.photo_url || ''}" alt="${item.name}" ${item.photo_url ? '' : 'style="display:none"'} />
+      <h3>${item.name}</h3>
+      <p><b>Qtd:</b> ${item.quantity}</p>
+      <p><b>Local:</b> ${item.location}</p>
+      <div class="actions" style="${canWrite() ? '' : 'display:none'}">
+        <button class="edit-btn" data-id="${item.id}">✏️ Editar</button>
+        <button class="delete-btn" data-id="${item.id}">🗑️ Excluir</button>
+      </div>
+    `;
+    const img = card.querySelector('img');
+    img?.addEventListener('click', () => { if (item.photo_url) window.open(item.photo_url, "_blank"); });
+    if (canWrite()) {
+      card.querySelector('.edit-btn')?.addEventListener('click', () => editItem(item.id));
+      card.querySelector('.delete-btn')?.addEventListener('click', () => deleteItem(item.id));
+    }
+    itemList.appendChild(card);
+  });
+}
+
+itemForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!canWrite()) { openModal('loginModal'); return; }
+
+  const name = document.getElementById('itemName').value.trim();
+  const quantity = Number(document.getElementById('itemQuantity').value) || 0;
+  const location = document.getElementById('itemLocation').value.trim();
+  let file = inputPhotoCamera.files[0] || inputPhotoGallery.files[0] || null;
+
+  submitButton.disabled = true;
+  submitButton.textContent = editingId ? 'Salvando...' : 'Cadastrando...';
+
+  try {
+    let photo_url = null;
+    if (file) {
+      file = await compressImage(file, 800, 0.7);
+      const fileName = `${Date.now()}-${file.name}`;
+      await supabase.storage.from('item-photos').upload(fileName, file);
+      photo_url = `${SUPABASE_URL}/storage/v1/object/public/item-photos/${fileName}?v=${Date.now()}`;
+    }
+
+    if (editingId) {
+      await supabase.from('items').update({ name, quantity, location, photo_url }).eq('id', editingId);
+      editingId = null;
+      submitButton.textContent = 'Cadastrar';
+    } else {
+      await supabase.from('items').insert([{ name, quantity, location, photo_url }]);
+      submitButton.textContent = 'Cadastrar';
+    }
+
+    itemForm.reset();
+    inputPhotoCamera.value = ""; inputPhotoGallery.value = "";
+    await loadItems();
+  } catch (err) {
+    console.error('Erro no cadastro/edição:', err);
+    alert('Erro ao salvar. Verifique suas permissões.');
+  } finally {
+    submitButton.disabled = false;
+  }
+});
+
+async function editItem(id) {
+  if (!canWrite()) { openModal('loginModal'); return; }
+  const { data } = await supabase.from('items').select('*').eq('id', id).single();
+  document.getElementById('itemId').value = data.id;
+  document.getElementById('itemName').value = data.name;
+  document.getElementById('itemQuantity').value = data.quantity;
+  document.getElementById('itemLocation').value = data.location;
+  editingId = id;
+  submitButton.textContent = 'Salvar';
+}
+
+async function deleteItem(id) {
+  if (!canWrite()) { openModal('loginModal'); return; }
+  if (!confirm('Excluir este item?')) return;
+  await supabase.from('items').delete().eq('id', id);
+  await loadItems();
+}
+
+/* Busca & Export */
+searchInput.addEventListener('input', (e)=> loadItems(e.target.value.trim()));
+exportButton.addEventListener('click', async () => {
+  const { data, error } = await supabase.from('items').select('*').order('created_at', { ascending: false });
+  if (error || !data?.length) return alert('Nenhum item para exportar.');
+  const rows = data.map(x => ({ Item:x.name, Quantidade:x.quantity, Local:x.location, Foto:x.photo_url||'Sem foto' }));
+  const ws = XLSX.utils.json_to_sheet(rows), wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Inventário'); XLSX.writeFile(wb, 'inventario_kids.xlsx');
+});
+
+/* =================================================
+   ADMIN (VISUAL + AÇÕES) — só aparece para ADMIN
+   ================================================= */
+async function loadProfiles() {
+  profilesBody.innerHTML = '<tr><td colspan="4">Carregando...</td></tr>';
+
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, email, role, created_at')
+    .order('created_at', { ascending: false });
+
+  if (error) { profilesBody.innerHTML = `<tr><td colspan="4">Erro: ${error.message}</td></tr>`; return; }
+  if (!data?.length) { profilesBody.innerHTML = '<tr><td colspan="4">Nenhum perfil.</td></tr>'; return; }
+
+  profilesBody.innerHTML = '';
+  data.forEach(p => {
+    const tr = document.createElement('tr');
+    const badgeClass = p.role === 'admin' ? '' : 'member';
+    tr.innerHTML = `
+      <td>${p.email}</td>
+      <td><span class="role-badge ${badgeClass}">${p.role}</span></td>
+      <td>${new Date(p.created_at).toLocaleString()}</td>
+      <td class="admin-row-actions">
+        <button class="btn promote">Promover a Admin</button>
+        <button class="btn demote">Tornar Membro</button>
+        <button class="btn delete">Remover</button>
+      </td>
+    `;
+
+    tr.querySelector('.promote').addEventListener('click', async () => {
+      if (!isAdmin()) return alert('Acesso negado.');
+      const { error } = await supabase.from('profiles').update({ role: 'admin' }).eq('id', p.id);
+      if (error) return alert('Erro: '+error.message);
+      loadProfiles();
+    });
+
+    tr.querySelector('.demote').addEventListener('click', async () => {
+      if (!isAdmin()) return alert('Acesso negado.');
+      const { error } = await supabase.from('profiles').update({ role: 'member' }).eq('id', p.id);
+      if (error) return alert('Erro: '+error.message);
+      loadProfiles();
+    });
+
+    tr.querySelector('.delete').addEventListener('click', async () => {
+      if (!isAdmin()) return alert('Acesso negado.');
+      if (!confirm(`Remover ${p.email}?`)) return;
+      const { error } = await supabase.from('profiles').delete().eq('id', p.id);
+      if (error) return alert('Erro: '+error.message);
+      loadProfiles();
+    });
+
+    profilesBody.appendChild(tr);
+  });
+}
+
+addUserBtn?.addEventListener('click', async () => {
+  if (!isAdmin()) return alert('Apenas administradores.');
+  const email = (newUserEmail.value||'').trim().toLowerCase();
+  if (!email || !email.includes('@')) return alert('Informe um e-mail válido.');
+
+  const { data: exists } = await supabase.from('profiles').select('id').eq('email', email).maybeSingle();
+  if (exists?.id) return alert('E-mail já cadastrado.');
+
+  const { error } = await supabase.from('profiles').insert([{ email, role: 'member' }]);
+  if (error) return alert('Erro: '+error.message);
+  newUserEmail.value = '';
+  loadProfiles();
+});
+
+/* =================================================
+   LOGIN / LOGOUT / MODAIS
+   ================================================= */
+fabAdmin.addEventListener('click', () => {
+  if (!isLoggedIn()) openModal('loginModal');
+  else {
+    accountTitle.textContent   = 'Conta';
+    accountSubtitle.textContent = `${currentUser.email} • ${currentRole.toUpperCase()}`;
+    openModal('accountModal');
+  }
+});
+
+userBadge.addEventListener('click', () => fabAdmin.click());
+
+loginButton.addEventListener('click', async () => {
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: { redirectTo: window.location.origin }
+  });
+  if (error) alert('Erro no login: ' + error.message);
+  else if (data?.url) window.location.href = data.url;
+});
+
+logoutButton.addEventListener('click', async () => {
+  await supabase.auth.signOut();
+  currentUser = null; currentRole = 'visitor';
+  closeModal('accountModal');
+  updateAuthUI();
+  await loadItems();
+});
+
+closeModalBtn.addEventListener('click', () => closeModal('loginModal'));
+closeAccountModal.addEventListener('click', () => closeModal('accountModal'));
+
+goAdminBtn.addEventListener('click', async () => {
+  if (!isAdmin()) return alert('Acesso negado.');
+  adminPanel.style.display = 'block';
+  closeModal('accountModal');
+  await loadProfiles();
+});
+
+/* =================================================
+   INICIALIZAÇÃO
+   ================================================= */
+document.addEventListener('DOMContentLoaded', async () => {
+  await refreshAuth();
+  await loadItems();
+  supabase.auth.onAuthStateChange(async () => {
+    await refreshAuth();
+    await loadItems();
+  });
+});
+
+/* Botões de foto */
+btnUseCamera?.addEventListener('click', ()=> document.getElementById("itemPhotoCamera").click());
+btnUseGallery?.addEventListener('click', ()=> document.getElementById("itemPhotoGallery").click());
