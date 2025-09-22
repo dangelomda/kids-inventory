@@ -1,304 +1,255 @@
-/* app.js — Inventário Kids (Auth + Roles + Painel Admin + Auto-logout Desktop) */
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
 
-/* ============================
-   SUPABASE
-============================ */
+/* ================================================
+   CONFIG SUPABASE (anon key para leitura pública)
+   ================================================ */
 const SUPABASE_URL = "https://msvmsaznklubseypxsbs.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1zdm1zYXpua2x1YnNleXB4c2JzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgyMzQ4MzQsImV4cCI6MjA3MzgxMDgzNH0.ZGDD31UVRtwUEpDBkGg6q_jgV8JD_yXqWtuZ_1dprrw";
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-/* ============================
-   DOM
-============================ */
-const itemForm = document.getElementById('itemForm');
-const itemList = document.getElementById('itemList');
-const submitButton = document.getElementById('submitButton');
-const searchInput = document.getElementById('searchInput');
-const exportButton = document.getElementById('exportButton');
-const visitorHint = document.getElementById('visitorHint');
+/* ================================================
+   ELEMENTOS
+   ================================================ */
+const itemForm       = document.getElementById('itemForm');
+const itemList       = document.getElementById('itemList');
+const submitButton   = document.getElementById('submitButton');
+const searchInput    = document.getElementById('searchInput');
+const exportButton   = document.getElementById('exportButton');
+const visitorHint    = document.getElementById('visitorHint');
+const adminPanel     = document.getElementById('adminPanel');
 
-const inputPhotoCamera = document.getElementById('itemPhotoCamera');
-const inputPhotoGallery = document.getElementById('itemPhotoGallery');
-document.getElementById('btnUseCamera').onclick = () => inputPhotoCamera.click();
-document.getElementById('btnUseGallery').onclick = () => inputPhotoGallery.click();
+const inputPhotoCamera  = document.getElementById("itemPhotoCamera");
+const inputPhotoGallery = document.getElementById("itemPhotoGallery");
+const btnUseCamera      = document.getElementById("btnUseCamera");
+const btnUseGallery     = document.getElementById("btnUseGallery");
 
-const adminPanel = document.getElementById('adminPanel');
+/* FAB & Modais */
+const fabAdmin           = document.getElementById('fabAdmin');
+const loginModal         = document.getElementById('loginModal');
+const accountModal       = document.getElementById('accountModal');
+const loginButton        = document.getElementById('loginButton');
+const closeModalBtn      = document.getElementById('closeModal');
+const logoutButton       = document.getElementById('logoutButton');
+const closeAccountModal  = document.getElementById('closeAccountModal');
+const accountTitle       = document.getElementById('accountTitle');
+const accountSubtitle    = document.getElementById('accountSubtitle');
+const goAdminBtn         = document.getElementById('goAdminBtn');
+
+/* Admin panel controls */
 const profilesBody = document.getElementById('profilesBody');
-const addUserBtn = document.getElementById('addUserBtn');
-const newUserEmailInput = document.getElementById('newUserEmail');
+const addUserBtn   = document.getElementById('addUserBtn');
+const newUserEmail = document.getElementById('newUserEmail');
 
-const fabAdmin = document.getElementById('fabAdmin');
-const loginModal = document.getElementById('loginModal');
-const accountModal = document.getElementById('accountModal');
-const loginButton = document.getElementById('loginButton');
-const closeLogin = document.getElementById('closeModal');
-const logoutButton = document.getElementById('logoutButton');
-const closeAccountModal = document.getElementById('closeAccountModal');
-const goAdminBtn = document.getElementById('goAdminBtn');
-const accountTitle = document.getElementById('accountTitle');
-const accountSubtitle = document.getElementById('accountSubtitle');
-
+/* ================================================
+   ESTADO DE AUTENTICAÇÃO / PAPÉIS
+   ================================================ */
 let editingId = null;
 let currentUser = null;
-let isAdmin = false;
+let currentRole = 'visitor'; // 'visitor' | 'member' | 'admin'
 
-/* ============================
+const isLoggedIn = () => !!currentUser;
+const canWrite   = () => ['member','admin'].includes(currentRole);
+const isAdmin    = () => currentRole === 'admin';
+
+/* ================================================
    UTILS
-============================ */
-function isDesktop() {
-  const ua = navigator.userAgent || '';
-  const isMobileUA = /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
-  const coarsePointer = window.matchMedia && window.matchMedia('(pointer:coarse)').matches;
-  return !isMobileUA && !coarsePointer;
+   ================================================ */
+function openModal(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.add('show');
+}
+function closeModal(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.remove('show');
 }
 
-let idleTimer = null;
-const IDLE_LIMIT_MS = 10 * 60 * 1000; // 10 min desktop
-
-function startIdleTimerIfDesktop() {
-  stopIdleTimer();
-  if (!isDesktop()) return;
-  if (!currentUser) return;
-
-  const reset = () => {
-    clearTimeout(idleTimer);
-    idleTimer = setTimeout(async () => {
-      await supabase.auth.signOut();
-      currentUser = null;
-      isAdmin = false;
-      renderAccess();
-      alert('Sessão encerrada por inatividade (desktop).');
-    }, IDLE_LIMIT_MS);
-  };
-  ['mousemove','mousedown','keydown','scroll','click','touchstart'].forEach(evt =>
-    window.addEventListener(evt, reset, { passive:true })
-  );
-  reset();
+function fmtDate(iso) {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString();
+  } catch { return iso || ''; }
 }
-function stopIdleTimer(){ if (idleTimer) clearTimeout(idleTimer); }
 
-function openModal(el){ el.style.display = 'flex'; }
-function closeModal(el){ el.style.display = 'none'; }
-
-/* ============================
-   AUTH + ROLE
-============================ */
-async function getUserAndRole() {
-  const { data } = await supabase.auth.getSession();
-  currentUser = data?.session?.user || null;
-  isAdmin = false;
-
-  if (currentUser) {
-    // garante que o profile exista; se não, cria como member
-    await supabase.from('profiles')
-      .insert({ id: currentUser.id, email: currentUser.email, role: 'member' })
-      .then(()=>{}).catch(()=>{ /* ignora conflito */ });
-
-    const { data: prof } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', currentUser.id)
-      .maybeSingle();
-
-    if (prof?.role === 'admin') isAdmin = true;
+function storageKeyFromPublicUrl(url) {
+  try {
+    const u = new URL(url);
+    const cut = '/storage/v1/object/public/';
+    const idx = u.pathname.indexOf(cut);
+    if (idx >= 0) {
+      const after = u.pathname.slice(idx + cut.length); // item-photos/filename.jpg
+      const parts = after.split('/');
+      // remove bucket prefix (item-photos/)
+      parts.shift();
+      return parts.join('/');
+    }
+    // fallback
+    const raw = url.split('/storage/v1/object/public/')[1] || '';
+    return raw.split('/').slice(1).join('/'); // remove bucket
+  } catch {
+    // última tentativa simples
+    const raw = (url || '').split('/item-photos/')[1] || '';
+    return raw.split('?')[0];
   }
 }
 
-async function signInWithGoogle() {
-  const { error } = await supabase.auth.signInWithOAuth({
-    provider: 'google',
-    options: { redirectTo: window.location.href }
-  });
-  if (error) alert('Erro no login: ' + error.message);
-}
-async function signOutAll() {
-  await supabase.auth.signOut();
-  currentUser = null; isAdmin = false;
-  renderAccess();
-}
-
-/* Ouve mudanças de sessão */
-supabase.auth.onAuthStateChange(async () => {
-  await getUserAndRole();
-  renderAccess();
-});
-
-/* ============================
-   UI / ACESSO
-============================ */
-function renderAccess() {
-  // Form: só admin e member podem cadastrar/editar/excluir; visitante apenas leitura
-  const canEdit = !!currentUser; // membro e admin podem (RLS ainda restringe server-side por role)
-  const showAdmin = isAdmin;
-
-  // No cliente: libera botões só se admin (para ficar coerente com seu pedido)
-  // Se quiser que 'member' também edite, troque para: const canEdit = isAdmin || isMember;
-  const allowCrudClient = isAdmin;
-
-  // Dica visitante
-  visitorHint.style.display = currentUser ? 'none' : 'block';
-
-  // Habilita/desabilita elementos do form
-  [...itemForm.querySelectorAll('input,button,select,textarea')].forEach(el => {
-    if (el === searchInput || el === exportButton) return;
-    el.disabled = !allowCrudClient;
-  });
-  submitButton.textContent = editingId ? 'Salvar' : 'Cadastrar';
-
-  // Painel admin
-  adminPanel.style.display = showAdmin ? 'block' : 'none';
-  goAdminBtn.style.display = showAdmin ? 'block' : 'none';
-
-  // FAB abre modal de conta/login
-  fabAdmin.style.display = 'block';
-
-  // Modal Conta: título/subtítulo
-  if (currentUser) {
-    accountTitle.textContent = isAdmin ? 'Admin' : 'Conta';
-    accountSubtitle.textContent = currentUser.email || '';
-  } else {
-    accountTitle.textContent = 'Visitante';
-    accountSubtitle.textContent = 'Entre para gerenciar itens.';
-  }
-
-  stopIdleTimer();
-  startIdleTimerIfDesktop();
-
-  // Recarrega itens para refletir botões (editar/excluir)
-  loadItems(searchInput.value.trim());
-  if (showAdmin) loadProfiles();
-}
-
-/* FAB → abre modal de conta/login */
-fabAdmin.addEventListener('click', () => {
-  if (currentUser) {
-    openModal(accountModal);
-  } else {
-    openModal(loginModal);
-  }
-});
-closeLogin.addEventListener('click', () => closeModal(loginModal));
-closeAccountModal.addEventListener('click', () => closeModal(accountModal));
-loginButton.addEventListener('click', signInWithGoogle);
-logoutButton.addEventListener('click', async () => { await signOutAll(); closeModal(accountModal); });
-goAdminBtn.addEventListener('click', () => {
-  closeModal(accountModal);
-  window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
-});
-
-/* ============================
-   IMAGEM: compressão
-============================ */
+/* Compressão simples */
 async function compressImage(file, maxWidth = 800, quality = 0.7) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.src = URL.createObjectURL(file);
     img.onload = () => {
       const scale = Math.min(1, maxWidth / img.width);
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+
       const canvas = document.createElement('canvas');
-      canvas.width = Math.round(img.width * scale);
-      canvas.height = Math.round(img.height * scale);
+      canvas.width = w; canvas.height = h;
+
       const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, w, h);
+
       canvas.toBlob(
-        blob => resolve(new File([blob], file.name.replace(/\.[^.]+$/,'') + '.jpg', { type: 'image/jpeg' })),
-        'image/jpeg', quality
+        (blob) => resolve(new File([blob], file.name.replace(/\.[^.]+$/, '') + ".jpg", { type: "image/jpeg" })),
+        "image/jpeg",
+        quality
       );
     };
     img.onerror = reject;
   });
 }
+
+/* Get arquivo da câmera/galeria */
 function getSelectedFile() {
-  if (inputPhotoCamera?.files?.length) return inputPhotoCamera.files[0];
-  if (inputPhotoGallery?.files?.length) return inputPhotoGallery.files[0];
+  if (inputPhotoCamera.files.length > 0) return inputPhotoCamera.files[0];
+  if (inputPhotoGallery.files.length > 0) return inputPhotoGallery.files[0];
   return null;
 }
 
-/* ============================
-   LISTAR ITENS
-============================ */
+/* ================================================
+   AUTH
+   ================================================ */
+async function refreshAuth() {
+  const { data: { session } } = await supabase.auth.getSession();
+  currentUser = session?.user || null;
+
+  if (currentUser?.email) {
+    const email = currentUser.email.toLowerCase();
+    const { data: prof, error } = await supabase
+      .from('profiles')
+      .select('email, role, created_at')
+      .eq('email', email)
+      .maybeSingle();
+
+    if (error) {
+      console.warn('Erro ao carregar perfil:', error.message);
+      currentRole = 'visitor';
+    } else {
+      currentRole = prof?.role || 'visitor';
+    }
+  } else {
+    currentRole = 'visitor';
+  }
+
+  updateAuthUI();
+}
+
+/* UI conforme papel */
+function updateAuthUI() {
+  // Hint visitante
+  visitorHint.style.display = canWrite() ? 'none' : 'block';
+
+  // FAB abre modal de conta se logado; caso contrário, login
+  // Botão de admin só aparece na conta se for admin
+  if (isAdmin()) {
+    goAdminBtn.style.display = 'block';
+  } else {
+    goAdminBtn.style.display = 'none';
+  }
+
+  // Não abrimos painel admin automaticamente; só quando usuário clicar
+}
+
+/* ================================================
+   ITENS (leitura pública; CRUD condicionado)
+   ================================================ */
 async function loadItems(filter = "") {
   let query = supabase.from('items').select('*').order('created_at', { ascending: false });
   if (filter) query = query.ilike('name', `%${filter}%`);
 
   const { data, error } = await query;
-  if (error) {
-    console.error('Erro ao carregar itens:', error);
-    itemList.innerHTML = '<p>Erro ao carregar itens.</p>';
-    return;
-  }
 
   itemList.innerHTML = '';
+  if (error) {
+    console.error("Erro ao carregar itens:", error);
+    itemList.innerHTML = `<p>Erro ao carregar itens.</p>`;
+    return;
+  }
   if (!data || data.length === 0) {
-    itemList.innerHTML = '<p>Nenhum item encontrado.</p>';
+    itemList.innerHTML = "<p>Nenhum item encontrado.</p>";
     return;
   }
 
   data.forEach(item => {
     const card = document.createElement('div');
     card.className = 'item-card';
-    const imgSrc = item.photo_url || '';
+
+    const canCrud = canWrite();
     card.innerHTML = `
-      <img src="${imgSrc}" alt="${item.name || ''}">
+      <img src="${item.photo_url || ''}" alt="${item.name}" ${item.photo_url ? '' : 'style="display:none"'} />
       <h3>${item.name}</h3>
       <p><b>Qtd:</b> ${item.quantity}</p>
       <p><b>Local:</b> ${item.location}</p>
-      <div class="actions"></div>
+      <div class="actions" style="${canCrud ? '' : 'display:none'}">
+        <button class="edit-btn" data-id="${item.id}">✏️ Editar</button>
+        <button class="delete-btn" data-id="${item.id}">🗑️ Excluir</button>
+      </div>
     `;
 
     const img = card.querySelector('img');
-    img.addEventListener('click', () => { if (imgSrc) window.open(imgSrc, '_blank'); });
+    if (img) {
+      img.addEventListener('click', () => {
+        if (item.photo_url) window.open(item.photo_url, "_blank");
+      });
+    }
 
-    const actions = card.querySelector('.actions');
-
-    if (isAdmin) {
-      const editBtn = document.createElement('button');
-      editBtn.className = 'edit-btn';
-      editBtn.textContent = '✏️ Editar';
-      editBtn.onclick = () => editItem(item.id);
-
-      const delBtn = document.createElement('button');
-      delBtn.className = 'delete-btn';
-      delBtn.textContent = '🗑️ Excluir';
-      delBtn.onclick = () => deleteItem(item.id);
-
-      actions.appendChild(editBtn);
-      actions.appendChild(delBtn);
+    if (canCrud) {
+      card.querySelector('.edit-btn')?.addEventListener('click', () => editItem(item.id));
+      card.querySelector('.delete-btn')?.addEventListener('click', () => deleteItem(item.id));
     }
 
     itemList.appendChild(card);
   });
 }
 
-/* ============================
-   CRUD ITENS (admin)
-============================ */
 itemForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  if (!isAdmin) { alert('Você não tem permissão para cadastrar/editar.'); return; }
+  if (!canWrite()) {
+    openModal('loginModal');
+    return;
+  }
 
-  const name = document.getElementById('itemName').value.trim();
+  const name     = document.getElementById('itemName').value.trim();
   const quantity = Number(document.getElementById('itemQuantity').value) || 0;
   const location = document.getElementById('itemLocation').value.trim();
-  let file = getSelectedFile();
+  let file       = getSelectedFile();
 
   submitButton.disabled = true;
-  submitButton.textContent = editingId ? 'Salvando...' : 'Cadastrando...';
+  submitButton.textContent = editingId ? "Salvando..." : "Cadastrando...";
+
+  let photo_url = null;
 
   try {
-    let photo_url = null;
-
     if (editingId) {
-      // EDITAR
+      // upload novo se tiver arquivo
       if (file) {
         file = await compressImage(file, 800, 0.7);
 
         const { data: itemData } = await supabase.from('items').select('photo_url').eq('id', editingId).single();
         if (itemData?.photo_url) {
-          const oldName = itemData.photo_url.split('/').pop().split('?')[0];
-          await supabase.storage.from('item-photos').remove([oldName]); // remove antiga
+          const key = storageKeyFromPublicUrl(itemData.photo_url); // filename dentro do bucket
+          if (key) await supabase.storage.from('item-photos').remove([key]);
         }
 
         const fileName = `${Date.now()}-${file.name}`;
@@ -313,17 +264,20 @@ itemForm.addEventListener('submit', async (e) => {
         .from('items')
         .update({ name, quantity, location, photo_url })
         .eq('id', editingId);
+
       if (upErr) throw upErr;
 
       editingId = null;
-      submitButton.textContent = 'Cadastrar';
+      submitButton.textContent = "Cadastrar";
     } else {
-      // INSERIR
-      const { data: existing } = await supabase.from('items').select('id').eq('name', name).maybeSingle();
+      // Evita duplicado por nome
+      const { data: existing } = await supabase
+        .from('items').select('id').eq('name', name).maybeSingle();
+
       if (existing) {
-        alert('⚠️ Este item já está cadastrado!');
+        alert("⚠️ Este item já está cadastrado!");
         submitButton.disabled = false;
-        submitButton.textContent = 'Cadastrar';
+        submitButton.textContent = "Cadastrar";
         return;
       }
 
@@ -337,179 +291,224 @@ itemForm.addEventListener('submit', async (e) => {
       const { error: insErr } = await supabase
         .from('items')
         .insert([{ name, quantity, location, photo_url }]);
+
       if (insErr) throw insErr;
+      submitButton.textContent = "Cadastrar";
     }
 
     itemForm.reset();
-    inputPhotoCamera.value = '';
-    inputPhotoGallery.value = '';
-    await loadItems(searchInput.value.trim());
+    inputPhotoCamera.value = "";
+    inputPhotoGallery.value = "";
+    await loadItems();
   } catch (err) {
-    console.error(err);
-    alert('Erro ao salvar item.');
+    console.error('Erro no cadastro/edição:', err);
+    alert('Erro ao salvar. Verifique suas permissões ou tente novamente.');
   } finally {
     submitButton.disabled = false;
-    submitButton.textContent = 'Cadastrar';
   }
 });
 
 async function editItem(id) {
-  if (!isAdmin) return alert('Sem permissão.');
-  const { data, error } = await supabase.from('items').select('*').eq('id', id).single();
-  if (error || !data) return alert('Item não encontrado.');
+  if (!canWrite()) { openModal('loginModal'); return; }
 
-  document.getElementById('itemId').value = data.id;
-  document.getElementById('itemName').value = data.name;
+  const { data, error } = await supabase.from('items').select('*').eq('id', id).single();
+  if (error) { alert('Erro ao carregar item.'); return; }
+
+  document.getElementById('itemId').value     = data.id;
+  document.getElementById('itemName').value   = data.name;
   document.getElementById('itemQuantity').value = data.quantity;
   document.getElementById('itemLocation').value = data.location;
   editingId = id;
-  submitButton.textContent = 'Salvar';
+  submitButton.textContent = "Salvar";
 }
 
 async function deleteItem(id) {
-  if (!isAdmin) return alert('Sem permissão.');
-  if (!confirm('Tem certeza que deseja excluir este item?')) return;
+  if (!canWrite()) { openModal('loginModal'); return; }
+  if (!confirm("Tem certeza que deseja excluir este item?")) return;
 
-  const { data: itemData } = await supabase.from('items').select('photo_url').eq('id', id).single();
-  if (itemData?.photo_url) {
-    const oldName = itemData.photo_url.split('/').pop().split('?')[0];
-    await supabase.storage.from('item-photos').remove([oldName]); // remove do storage
+  try {
+    const { data: itemData } = await supabase.from('items').select('photo_url').eq('id', id).single();
+    if (itemData?.photo_url) {
+      const key = storageKeyFromPublicUrl(itemData.photo_url);
+      if (key) await supabase.storage.from('item-photos').remove([key]);
+    }
+    const { error } = await supabase.from('items').delete().eq('id', id);
+    if (error) throw error;
+    await loadItems();
+  } catch (err) {
+    console.error('Erro ao excluir:', err);
+    alert('Erro ao excluir. Verifique suas permissões.');
   }
-
-  const { error } = await supabase.from('items').delete().eq('id', id);
-  if (error) {
-    console.error(error);
-    alert('Erro ao excluir item.');
-    return;
-  }
-  loadItems(searchInput.value.trim());
 }
 
-/* ============================
-   BUSCA / EXPORTAÇÃO
-============================ */
-searchInput.addEventListener('input', (e) => loadItems(e.target.value.trim()));
+/* Busca em tempo real */
+searchInput.addEventListener("input", (e) => {
+  const value = e.target.value.trim();
+  loadItems(value);
+});
 
-exportButton.addEventListener('click', async () => {
-  const { data, error } = await supabase.from('items').select('*').order('created_at', { ascending: false });
+/* Exportar Excel */
+exportButton.addEventListener("click", async () => {
+  const { data, error } = await supabase.from("items").select("*").order("created_at", { ascending: false });
   if (error || !data || data.length === 0) {
-    alert('Nenhum item para exportar.');
+    alert("Nenhum item para exportar.");
     return;
   }
+
   const rows = data.map(item => ({
     Item: item.name,
     Quantidade: item.quantity,
     Local: item.location,
-    Foto: item.photo_url || 'Sem foto'
+    Foto: item.photo_url || "Sem foto"
   }));
-  const ws = XLSX.utils.json_to_sheet(rows);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Inventário');
-  XLSX.writeFile(wb, 'inventario_kids.xlsx');
+
+  const worksheet = XLSX.utils.json_to_sheet(rows);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Inventário");
+  XLSX.writeFile(workbook, "inventario_kids.xlsx");
 });
 
-/* ============================
-   PAINEL ADMIN (profiles)
-============================ */
+/* ================================================
+   ADMIN (somente admin)
+   ================================================ */
 async function loadProfiles() {
   profilesBody.innerHTML = '<tr><td colspan="4">Carregando...</td></tr>';
   const { data, error } = await supabase
     .from('profiles')
-    .select('id,email,role,created_at')
+    .select('id, email, role, created_at')
     .order('created_at', { ascending: false });
 
   if (error) {
-    console.error(error);
-    profilesBody.innerHTML = '<tr><td colspan="4">Erro ao carregar perfis.</td></tr>';
+    profilesBody.innerHTML = `<tr><td colspan="4">Erro: ${error.message}</td></tr>`;
     return;
   }
+
   if (!data || data.length === 0) {
-    profilesBody.innerHTML = '<tr><td colspan="4">Nenhum usuário.</td></tr>';
+    profilesBody.innerHTML = '<tr><td colspan="4">Nenhum perfil.</td></tr>';
     return;
   }
 
   profilesBody.innerHTML = '';
-  data.forEach(u => {
+  data.forEach(p => {
     const tr = document.createElement('tr');
 
-    const tdEmail = document.createElement('td');
-    tdEmail.textContent = u.email || '(sem e-mail)';
+    const badgeClass = p.role === 'admin' ? '' : 'member';
+    tr.innerHTML = `
+      <td>${p.email}</td>
+      <td><span class="role-badge ${badgeClass}">${p.role}</span></td>
+      <td>${fmtDate(p.created_at)}</td>
+      <td class="admin-row-actions">
+        <button class="btn promote" data-id="${p.id}" data-role="${p.role}">Promover a Admin</button>
+        <button class="btn demote"  data-id="${p.id}" data-role="${p.role}">Tornar Membro</button>
+        <button class="btn delete"  data-id="${p.id}">Remover</button>
+      </td>
+    `;
 
-    const tdRole = document.createElement('td');
-    const badge = document.createElement('span');
-    badge.className = 'role-badge ' + (u.role === 'admin' ? 'admin' : 'member');
-    badge.textContent = u.role === 'admin' ? 'admin' : 'member';
-    tdRole.appendChild(badge);
+    tr.querySelector('.promote').addEventListener('click', async () => {
+      if (!isAdmin()) return alert('Acesso negado.');
+      if (p.role === 'admin') return alert('Já é admin.');
+      const { error } = await supabase.from('profiles').update({ role: 'admin' }).eq('id', p.id);
+      if (error) return alert('Erro: ' + error.message);
+      loadProfiles();
+    });
 
-    const tdCreated = document.createElement('td');
-    tdCreated.textContent = new Date(u.created_at).toLocaleString();
+    tr.querySelector('.demote').addEventListener('click', async () => {
+      if (!isAdmin()) return alert('Acesso negado.');
+      if (p.role === 'member') return alert('Já é membro.');
+      const { error } = await supabase.from('profiles').update({ role: 'member' }).eq('id', p.id);
+      if (error) return alert('Erro: ' + error.message);
+      loadProfiles();
+    });
 
-    const tdActions = document.createElement('td');
-    tdActions.className = 'admin-row-actions';
+    tr.querySelector('.delete').addEventListener('click', async () => {
+      if (!isAdmin()) return alert('Acesso negado.');
+      if (!confirm(`Remover ${p.email}?`)) return;
+      const { error } = await supabase.from('profiles').delete().eq('id', p.id);
+      if (error) return alert('Erro: ' + error.message);
+      loadProfiles();
+    });
 
-    if (u.role === 'admin') {
-      const demote = document.createElement('button');
-      demote.className = 'btn demote';
-      demote.textContent = 'Tornar Membro';
-      demote.onclick = () => setRole(u.id, 'member');
-      tdActions.appendChild(demote);
-    } else {
-      const promote = document.createElement('button');
-      promote.className = 'btn promote';
-      promote.textContent = 'Promover a Admin';
-      promote.onclick = () => setRole(u.id, 'admin');
-      tdActions.appendChild(promote);
-    }
-
-    // Excluir
-    const del = document.createElement('button');
-    del.className = 'btn delete';
-    del.textContent = 'Excluir';
-    del.onclick = () => deleteProfile(u.id, u.email);
-    tdActions.appendChild(del);
-
-    tr.appendChild(tdEmail);
-    tr.appendChild(tdRole);
-    tr.appendChild(tdCreated);
-    tr.appendChild(tdActions);
     profilesBody.appendChild(tr);
   });
 }
 
-async function setRole(userId, role) {
-  if (!confirm(`Confirmar alteração de função para "${role}"?`)) return;
-  const { error } = await supabase.from('profiles').update({ role }).eq('id', userId);
-  if (error) { alert('Erro ao alterar função.'); console.error(error); return; }
-  loadProfiles();
-}
+addUserBtn?.addEventListener('click', async () => {
+  if (!isAdmin()) { alert('Apenas administradores.'); return; }
+  const email = (newUserEmail.value || '').trim().toLowerCase();
+  if (!email || !email.includes('@')) {
+    alert('Informe um e-mail válido.'); return;
+  }
+  // Insere como membro (se já existir, ignora)
+  const { data: exists } = await supabase.from('profiles').select('id').eq('email', email).maybeSingle();
+  if (exists?.id) { alert('Este e-mail já está cadastrado.'); return; }
 
-async function deleteProfile(userId, email) {
-  if (!confirm(`Excluir usuário ${email}? Isso remove o acesso.`)) return;
-  const { error } = await supabase.from('profiles').delete().eq('id', userId);
-  if (error) { alert('Erro ao excluir.'); console.error(error); return; }
-  loadProfiles();
-}
-
-addUserBtn.addEventListener('click', async () => {
-  const email = (newUserEmailInput.value || '').trim().toLowerCase();
-  if (!email) return alert('Informe um e-mail.');
-  // cria como member (id será gerado se sua tabela tiver default UUID; se não, apenas armazena email/role e id será vinculado no primeiro login)
-  const { error } = await supabase.from('profiles').insert({ email, role: 'member' });
-  if (error) { alert('Erro ao adicionar. Verifique a policy de INSERT para admin.'); console.error(error); return; }
-  newUserEmailInput.value = '';
+  const { error } = await supabase.from('profiles').insert([{ email, role: 'member' }]);
+  if (error) { alert('Erro: ' + error.message); return; }
+  newUserEmail.value = '';
   loadProfiles();
 });
 
-/* ============================
-   BOOT
-============================ */
-(async function bootstrap() {
-  await getUserAndRole();
-  renderAccess();
+/* ================================================
+   LOGIN / LOGOUT / CONTAS
+   ================================================ */
+fabAdmin.addEventListener('click', () => {
+  if (!isLoggedIn()) {
+    openModal('loginModal');
+  } else {
+    accountTitle.textContent = 'Conta';
+    accountSubtitle.textContent = `${currentUser.email} • ${currentRole.toUpperCase()}`;
+    openModal('accountModal');
+  }
+});
+
+loginButton.addEventListener('click', async () => {
+  // Redireciona para login Google
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: window.location.origin
+    }
+  });
+  if (error) {
+    alert('Erro no login: ' + error.message);
+  } else if (data?.url) {
+    window.location.href = data.url;
+  }
+});
+
+logoutButton.addEventListener('click', async () => {
+  await supabase.auth.signOut();
+  closeModal('accountModal');
+  await refreshAuth();
+  await loadItems();
+});
+
+closeModalBtn.addEventListener('click', () => closeModal('loginModal'));
+closeAccountModal.addEventListener('click', () => closeModal('accountModal'));
+
+goAdminBtn.addEventListener('click', async () => {
+  if (!isAdmin()) { alert('Acesso negado.'); return; }
+  adminPanel.style.display = 'block';
+  closeModal('accountModal');
+  await loadProfiles();
+});
+
+/* ================================================
+   BOTÕES DE FOTO
+   ================================================ */
+btnUseCamera.addEventListener('click', () => inputPhotoCamera.click());
+btnUseGallery.addEventListener('click', () => inputPhotoGallery.click());
+
+/* ================================================
+   INICIALIZAÇÃO
+   ================================================ */
+document.addEventListener('DOMContentLoaded', async () => {
+  await refreshAuth();
   await loadItems();
 
-  // Fecha modais clicando fora
-  [loginModal, accountModal].forEach(modal => {
-    modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(modal); });
+  // Atualiza papel se a sessão mudar (ex.: retorno do OAuth)
+  supabase.auth.onAuthStateChange(async () => {
+    await refreshAuth();
+    await loadItems();
   });
-})();
+});

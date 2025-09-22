@@ -1,5 +1,6 @@
 /* Base */
 * { box-sizing: border-box; }
+html, body { width: 100%; max-width: 100%; overflow-x: hidden; }
 body {
   font-family: 'Poppins', sans-serif;
   background: #f9f9fb;
@@ -233,13 +234,15 @@ input:focus { border-color: #4A90E2; box-shadow: 0 0 4px rgba(74,144,226,.3); }
 
 /* Modal genérico */
 .modal {
-  display: none;
+  display: none;                 /* <- fica escondido por padrão */
   position: fixed; z-index: 2000;
   inset: 0;
   background: rgba(0,0,0,0.5);
-  display: flex; align-items: center; justify-content: center;
+  align-items: center; justify-content: center;
   padding: 16px;
 }
+.modal.show { display: flex; }   /* <- mostramos com a classe .show */
+
 .modal-content {
   background: #fff;
   padding: 1.5rem;
