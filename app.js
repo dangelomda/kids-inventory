@@ -1,17 +1,17 @@
-// app.js — Inventário Kids (invite-only + active + roles + CRUD + fotos + admin)
+// app.js — Inventário Kids (versão final corrigida)
 // -----------------------------------------------------------------------------
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
 
 /* =================================================
-   SUPABASE
+   CONFIGURAÇÃO SUPABASE
    ================================================= */
 const SUPABASE_URL = "https://msvmsaznklubseypxsbs.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1zdm1zYXpua2x1YnNleXB4c2JzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgyMzQ4MzQsImV4cCI6MjA3MzgxMDgzNH0.ZGDD31UVRtwUEpDBkGg6q_jgV8JD_yXqWtuZ_1dprrw";
+const SUPABASE_KEY = "eyJhbGciOiJIJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1zdm1zYXpua2x1YnNleXB4c2JzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgyMzQ4MzQsImV4cCI6MjA3MzgxMDgzNH0.ZGDD31UVRtwUEpDBkGg6q_jgV8JD_yXqWtuZ_1dprrw";
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 /* =================================================
-   DOM
+   ELEMENTOS DO DOM
    ================================================= */
 const itemForm  = document.getElementById('itemForm');
 const itemList  = document.getElementById('itemList');
@@ -30,7 +30,6 @@ const btnUseGallery = document.getElementById("btnUseGallery");
 const userBadge     = document.getElementById('userBadge');
 const userBadgeText = document.getElementById('userBadgeText');
 const userBadgeDot  = document.getElementById('userBadgeDot');
-
 const fabAdmin          = document.getElementById('fabAdmin');
 const loginModal        = document.getElementById('loginModal');
 const accountModal      = document.getElementById('accountModal');
@@ -42,25 +41,25 @@ const accountTitle      = document.getElementById('accountTitle');
 const accountSubtitle   = document.getElementById('accountSubtitle');
 const goAdminBtn        = document.getElementById('goAdminBtn');
 
-/* Admin panel */
+/* Painel Admin */
 const profilesBody = document.getElementById('profilesBody');
 const addUserBtn   = document.getElementById('addUserBtn');
 const newUserEmail = document.getElementById('newUserEmail');
 
 /* =================================================
-   ESTADO
+   ESTADO DA APLICAÇÃO
    ================================================= */
 let editingId = null;
 let currentUser = null;
 let currentRole = 'visitor';
-let currentActive = false; // só escreve se active = TRUE
+let currentActive = false;
 
 const isLoggedIn = () => !!currentUser;
 const canWrite   = () => currentActive && ['member','admin'].includes(currentRole);
 const isAdmin    = () => currentActive && currentRole === 'admin';
 
 /* =================================================
-   UTILS
+   FUNÇÕES UTILITÁRIAS
    ================================================= */
 const openModal  = (id) => document.getElementById(id)?.classList.add('show');
 const closeModal = (id) => document.getElementById(id)?.classList.remove('show');
@@ -94,7 +93,6 @@ async function compressImage(file, maxWidth = 800, quality = 0.7) {
   });
 }
 
-/* extrai o caminho relativo dentro do bucket item-photos */
 function pathFromPublicUrl(url) {
   if (!url) return null;
   try {
@@ -107,33 +105,37 @@ function pathFromPublicUrl(url) {
 }
 
 /* =================================================
-   AUTH — invite-only (NÃO cria perfil no login)
+   AUTENTICAÇÃO (CORRIGIDO: APENAS PARA CONVIDADOS)
    ================================================= */
 async function refreshAuth() {
   const { data: { session } } = await supabase.auth.getSession();
   currentUser = session?.user || null;
 
-  // padrão
+  // Define o padrão como visitante. Só muda se encontrar um perfil.
   currentRole = 'visitor';
   currentActive = false;
 
   if (currentUser?.email) {
     const email = canon(currentUser.email);
 
-    // procura convite
+    // Apenas PROCURA por um perfil. NUNCA cria um novo.
     const { data: prof, error } = await supabase
       .from('profiles')
-      .select('id, email, role, active')
+      .select('id, role, active')
       .eq('email', email)
       .maybeSingle();
 
-    if (!error && prof) {
-      // se convidado mas ainda sem id, faz só o bind do primeiro login
-      if (!prof.id) {
-        await supabase.from('profiles').update({ id: currentUser.id }).eq('email', email);
-      }
+    if (error) {
+      console.error("Erro ao buscar perfil:", error.message);
+    } else if (prof) {
+      // Se encontrou um perfil, atualiza as permissões
       currentRole   = prof.role || 'visitor';
       currentActive = !!prof.active;
+
+      // Se o usuário fez login pela primeira vez, associa o ID dele ao perfil
+      if (!prof.id && currentUser.id) {
+        await supabase.from('profiles').update({ id: currentUser.id }).eq('email', email);
+      }
     }
   }
   updateAuthUI();
@@ -146,7 +148,7 @@ function updateAuthUI() {
 }
 
 /* =================================================
-   ITENS (CRUD + fotos sem duplicar)
+   ITENS (CRUD CORRIGIDO E ROBUSTO)
    ================================================= */
 async function loadItems(filter = "") {
   let q = supabase.from('items').select('*').order('created_at', { ascending: false });
@@ -170,21 +172,16 @@ async function loadItems(filter = "") {
         <button class="delete-btn">🗑️ Excluir</button>
       </div>
     `;
-
-    card.querySelector('img')?.addEventListener('click', () => {
-      if (item.photo_url) window.open(item.photo_url, "_blank");
-    });
-
+    card.querySelector('img')?.addEventListener('click', () => { if (item.photo_url) window.open(item.photo_url, "_blank"); });
     if (canWrite()) {
       card.querySelector('.edit-btn')?.addEventListener('click', () => editItem(item));
       card.querySelector('.delete-btn')?.addEventListener('click', () => deleteItem(item));
     }
-
     itemList.appendChild(card);
   });
 }
 
-// envio do formulário (criar/editar)
+// <-- MELHORIA: Lógica de envio do formulário mais robusta para evitar congelamento
 itemForm?.addEventListener('submit', async (e) => {
   e.preventDefault();
   if (!canWrite()) { openModal('loginModal'); return; }
@@ -194,13 +191,11 @@ itemForm?.addEventListener('submit', async (e) => {
   const location = document.getElementById('itemLocation').value.trim();
   const file = inputPhotoCamera.files[0] || inputPhotoGallery.files[0] || null;
 
-  // URL da foto atual fica guardada no dataset do #itemId
   const itemIdInput = document.getElementById('itemId');
   const currentPhotoUrl = itemIdInput?.dataset.currentPhotoUrl || null;
+  const isEdit = !!editingId;
 
   submitButton.disabled = true;
-  const isEdit = !!editingId;
-  const originalText = isEdit ? 'Salvar' : 'Cadastrar';
   submitButton.textContent = isEdit ? 'Salvando...' : 'Cadastrando...';
 
   try {
@@ -220,7 +215,7 @@ itemForm?.addEventListener('submit', async (e) => {
       const { error: updErr } = await supabase.from('items').update(payload).eq('id', editingId);
       if (updErr) throw updErr;
 
-      // apaga a foto antiga apenas DEPOIS de atualizar com sucesso
+      // <-- CORREÇÃO: Apaga a foto antiga APENAS DEPOIS de atualizar o item com sucesso
       if (file && currentPhotoUrl) {
         const oldPath = pathFromPublicUrl(currentPhotoUrl);
         if (oldPath) await supabase.storage.from('item-photos').remove([oldPath]);
@@ -232,11 +227,12 @@ itemForm?.addEventListener('submit', async (e) => {
 
     await loadItems();
     itemForm.reset();
+
   } catch (err) {
     console.error('Erro ao salvar item:', err);
     alert(`Erro ao salvar: ${err.message}`);
   } finally {
-    // reset de estado
+    // <-- CORREÇÃO: Bloco "finally" para garantir que o formulário NUNCA fique travado
     editingId = null;
     if (itemIdInput) itemIdInput.dataset.currentPhotoUrl = '';
     submitButton.disabled = false;
@@ -252,9 +248,9 @@ function editItem(item) {
   document.getElementById('itemName').value = item.name;
   document.getElementById('itemQuantity').value = item.quantity;
   document.getElementById('itemLocation').value = item.location;
-  document.getElementById('itemId').dataset.currentPhotoUrl = item.photo_url || '';
+  document.getElementById('itemId').dataset.currentPhotoUrl = item.photo_url || ''; // Armazena a URL atual
   editingId = item.id;
-  submitButton.textContent = "Salvar";
+  submitButton.textContent = "Salvar Alterações";
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -262,12 +258,15 @@ async function deleteItem(item) {
   if (!canWrite()) { openModal('loginModal'); return; }
   if (!confirm(`Excluir "${item.name}"?`)) return;
   try {
+    // <-- MELHORIA: A ordem já estava correta, mas foi mantida e garantida
     const { error: delErr } = await supabase.from('items').delete().eq('id', item.id);
     if (delErr) throw delErr;
 
     if (item.photo_url) {
       const path = pathFromPublicUrl(item.photo_url);
-      if (path) await supabase.storage.from('item-photos').remove([path]);
+      if (path) {
+        await supabase.storage.from('item-photos').remove([path]);
+      }
     }
     await loadItems();
   } catch (err) {
@@ -276,23 +275,24 @@ async function deleteItem(item) {
   }
 }
 
-/* Busca & Export */
+/* Busca & Exportar */
 searchInput?.addEventListener('input', (e)=> loadItems(e.target.value.trim()));
 exportButton?.addEventListener('click', async () => {
   const { data, error } = await supabase.from('items').select('*').order('created_at', { ascending: false });
   if (error) return alert('Erro ao exportar.');
   if (!data?.length) return alert('Nenhum item para exportar.');
   const rows = data.map(x => ({ Item:x.name, Quantidade:x.quantity, Local:x.location, Foto:x.photo_url||'Sem foto' }));
-  const ws = XLSX.utils.json_to_sheet(rows), wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Inventário'); XLSX.writeFile(wb, 'inventario_kids.xlsx');
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Inventário');
+  XLSX.writeFile(wb, 'inventario_kids.xlsx');
 });
 
 /* =================================================
-   ADMIN (convidar / ativar / promover / remover)
+   PAINEL ADMIN
    ================================================= */
 async function loadProfiles() {
   profilesBody.innerHTML = '<tr><td colspan="5">Carregando...</td></tr>';
-
   const { data, error } = await supabase
     .from('profiles')
     .select('id, email, role, active, created_at')
@@ -316,32 +316,27 @@ async function loadProfiles() {
         <button class="btn delete">Remover</button>
       </td>
     `;
-
     tr.querySelector('.toggle').addEventListener('click', async () => {
       if (!isAdmin()) return alert('Acesso negado.');
       await supabase.from('profiles').update({ active: !p.active }).eq('email', p.email);
       loadProfiles();
     });
-
     tr.querySelector('.promote').addEventListener('click', async () => {
       if (!isAdmin()) return alert('Acesso negado.');
       await supabase.from('profiles').update({ role: 'admin', active: true }).eq('email', p.email);
       loadProfiles();
     });
-
     tr.querySelector('.demote').addEventListener('click', async () => {
       if (!isAdmin()) return alert('Acesso negado.');
       await supabase.from('profiles').update({ role: 'member', active: true }).eq('email', p.email);
       loadProfiles();
     });
-
     tr.querySelector('.delete').addEventListener('click', async () => {
       if (!isAdmin()) return alert('Acesso negado.');
       if (!confirm(`Remover ${p.email}?`)) return;
       await supabase.from('profiles').delete().eq('email', p.email);
       loadProfiles();
     });
-
     profilesBody.appendChild(tr);
   });
 }
@@ -351,7 +346,6 @@ addUserBtn?.addEventListener('click', async () => {
   const email = canon(newUserEmail.value);
   if (!email || !email.includes('@')) return alert('Informe um e-mail válido.');
 
-  // convite explícito (unique por email na DB)
   const { error } = await supabase.from('profiles').insert([{ email, role: 'member', active: true }]);
   if (error && !String(error.message).toLowerCase().includes('duplicate')) {
     alert('Erro: ' + error.message);
@@ -377,22 +371,15 @@ fabAdmin?.addEventListener('click', handleAuthClick);
 userBadge?.addEventListener('click', handleAuthClick);
 
 loginButton?.addEventListener('click', async () => {
-  const { data, error } = await supabase.auth.signInWithOAuth({
+  await supabase.auth.signInWithOAuth({
     provider: 'google',
     options: { redirectTo: window.location.origin }
   });
-  if (error) alert('Erro no login: ' + error.message);
-  else if (data?.url) window.location.href = data.url;
 });
 
 logoutButton?.addEventListener('click', async () => {
-  await supabase.auth.signOut();  // logout efetivo
-  currentUser = null;
-  currentRole = 'visitor';
-  currentActive = false;
-  updateAuthUI();
-  closeModal('accountModal');
-  await loadItems();
+  await supabase.auth.signOut();
+  // O evento onAuthStateChange vai cuidar da atualização da UI
 });
 
 closeModalBtn?.addEventListener('click', () => closeModal('loginModal'));
@@ -410,14 +397,14 @@ goAdminBtn?.addEventListener('click', async () => {
    INICIALIZAÇÃO
    ================================================= */
 document.addEventListener('DOMContentLoaded', async () => {
-  // Botões de foto (UX mobile)
   btnUseCamera?.addEventListener('click', () => inputPhotoCamera.click());
   btnUseGallery?.addEventListener('click', () => inputPhotoGallery.click());
 
   await refreshAuth();
   await loadItems();
 
-  supabase.auth.onAuthStateChange(async () => {
+  supabase.auth.onAuthStateChange(async (event, session) => {
+    // Essa função será chamada sempre que o usuário logar ou deslogar
     await refreshAuth();
     await loadItems();
   });
