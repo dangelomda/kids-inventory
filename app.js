@@ -1,3 +1,5 @@
+// app.js — Inventário Kids (invite-only + roles + CRUD + fotos + admin)
+// ---------------------------------------------------------------
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
 
@@ -24,12 +26,10 @@ const inputPhotoGallery = document.getElementById("itemPhotoGallery");
 const btnUseCamera  = document.getElementById("btnUseCamera");
 const btnUseGallery = document.getElementById("btnUseGallery");
 
-/* Badge */
+/* Badge / Modais */
 const userBadge     = document.getElementById('userBadge');
 const userBadgeText = document.getElementById('userBadgeText');
 const userBadgeDot  = document.getElementById('userBadgeDot');
-
-/* Modais */
 const fabAdmin          = document.getElementById('fabAdmin');
 const loginModal        = document.getElementById('loginModal');
 const accountModal      = document.getElementById('accountModal');
@@ -50,25 +50,28 @@ const newUserEmail = document.getElementById('newUserEmail');
    ESTADO
    ================================================= */
 let editingId = null;
-let editingPhotoUrl = null;   // <- foto atual do item em edição
+let editingPhotoUrl = null;
 let currentUser = null;
 let currentRole = 'visitor';
+let currentActive = false; // só membro/admin com active=TRUE podem escrever
 
 const isLoggedIn = () => !!currentUser;
-const canWrite   = () => ['member','admin'].includes(currentRole);
-const isAdmin    = () => currentRole === 'admin';
+const canWrite   = () => currentActive && ['member','admin'].includes(currentRole);
+const isAdmin    = () => currentActive && currentRole === 'admin';
 
 /* =================================================
    UTILS
    ================================================= */
 const openModal  = (id) => document.getElementById(id)?.classList.add('show');
 const closeModal = (id) => document.getElementById(id)?.classList.remove('show');
+const canon = (s) => (s||'').trim().toLowerCase();
 
-function setBadge(email, role) {
+function setBadge(email, role, active) {
   const r = (role || 'visitor').toLowerCase();
-  userBadgeText.textContent = email ? `Logado como: ${email} • ${r.toUpperCase()}` : 'VISITOR';
+  const tag = active ? r.toUpperCase() : 'VISITOR';
+  userBadgeText.textContent = email ? `${email} • ${tag}` : 'VISITOR';
   userBadgeDot.classList.remove('visitor','member','admin');
-  userBadgeDot.classList.add(r);
+  userBadgeDot.classList.add(active ? r : 'visitor');
 }
 
 async function compressImage(file, maxWidth = 800, quality = 0.7) {
@@ -92,64 +95,66 @@ async function compressImage(file, maxWidth = 800, quality = 0.7) {
   });
 }
 
-/* extrai o caminho do objeto a partir da URL pública do storage */
 function pathFromPublicUrl(url) {
   try {
     const u = new URL(url);
     const marker = '/object/public/';
     const i = u.pathname.indexOf(marker);
     if (i === -1) return null;
-    let tail = u.pathname.slice(i + marker.length); // ex: item-photos/123.jpg
+    let tail = u.pathname.slice(i + marker.length); // ex: item-photos/xxx.jpg
     if (!tail.startsWith('item-photos/')) return null;
-    return tail.replace('item-photos/', '');        // ex: 123.jpg
+    return tail.replace('item-photos/', '');        // ex: xxx.jpg
   } catch {
     return null;
   }
 }
 
 /* =================================================
-   AUTH
+   AUTH  (INVITE-ONLY: sem insert automático)
    ================================================= */
 async function refreshAuth() {
   const { data: { session } } = await supabase.auth.getSession();
   currentUser = session?.user || null;
 
-  if (currentUser?.email) {
-    const email = currentUser.email.toLowerCase();
+  currentRole = 'visitor';
+  currentActive = false;
 
-    // tenta carregar o perfil
-    let { data: prof } = await supabase
+  if (currentUser?.email) {
+    const email = canon(currentUser.email);
+
+    // 1) Procurar convite existente por e-mail (NÃO INSERE AUTOMÁTICO)
+    const { data: prof, error } = await supabase
       .from('profiles')
-      .select('id, email, role, created_at')
-      .ilike('email', email)
+      .select('id, email, role, active')
+      .eq('email', email)
       .maybeSingle();
 
-    // se não existir, cria automaticamente (visitor)
-    if (!prof) {
-      const insert = await supabase.from('profiles').insert({
-        id: currentUser.id, email, role: 'visitor'
-      });
-      if (!insert.error) {
-        prof = { role: 'visitor' };
+    if (!error && prof) {
+      // 2) Se foi convidado e ainda não tem id, faz o bind do primeiro login
+      if (!prof.id) {
+        await supabase.from('profiles')
+          .update({ id: currentUser.id })
+          .eq('email', email);
       }
+      // 3) Só aplica permissão se active=TRUE
+      currentRole = prof.role || 'visitor';
+      currentActive = !!prof.active;
     }
-
-    currentRole = prof?.role || 'visitor';
-  } else {
-    currentRole = 'visitor';
   }
-
   updateAuthUI();
 }
 
 function updateAuthUI() {
-  visitorHint.style.display = canWrite() ? 'none' : 'block';
-  goAdminBtn.style.display  = isAdmin() ? 'block' : 'none';
-  setBadge(currentUser?.email || null, currentRole);
+  // aviso de somente leitura
+  if (visitorHint) visitorHint.style.display = canWrite() ? 'none' : 'block';
+  // botão painel admin
+  if (goAdminBtn)  goAdminBtn.style.display  = isAdmin() ? 'block' : 'none';
+  // badge
+  setBadge(currentUser?.email || null, currentRole, currentActive);
 }
 
 /* =================================================
-   ITENS
+   ITENS (CRUD + fotos)
    ================================================= */
 async function loadItems(filter = "") {
   let q = supabase.from('items').select('*').order('created_at', { ascending: false });
@@ -184,7 +189,7 @@ async function loadItems(filter = "") {
   });
 }
 
-itemForm.addEventListener('submit', async (e) => {
+itemForm?.addEventListener('submit', async (e) => {
   e.preventDefault();
   if (!canWrite()) { openModal('loginModal'); return; }
 
@@ -198,15 +203,14 @@ itemForm.addEventListener('submit', async (e) => {
 
   try {
     let photo_url = null;
-
     if (editingId) {
-      // edição
       if (file) {
         file = await compressImage(file, 800, 0.7);
         const fileName = `${Date.now()}-${file.name}`;
         await supabase.storage.from('item-photos').upload(fileName, file);
         photo_url = `${SUPABASE_URL}/storage/v1/object/public/item-photos/${fileName}?v=${Date.now()}`;
 
+        // remove a antiga se havia
         if (editingPhotoUrl) {
           const path = pathFromPublicUrl(editingPhotoUrl);
           if (path) await supabase.storage.from('item-photos').remove([path]);
@@ -270,8 +274,8 @@ async function deleteItem(id) {
 }
 
 /* Busca & Export */
-searchInput.addEventListener('input', (e)=> loadItems(e.target.value.trim()));
-exportButton.addEventListener('click', async () => {
+searchInput?.addEventListener('input', (e)=> loadItems(e.target.value.trim()));
+exportButton?.addEventListener('click', async () => {
   const { data, error } = await supabase.from('items').select('*').order('created_at', { ascending: false });
   if (error || !data?.length) return alert('Nenhum item para exportar.');
   const rows = data.map(x => ({ Item:x.name, Quantidade:x.quantity, Local:x.location, Foto:x.photo_url||'Sem foto' }));
@@ -280,53 +284,57 @@ exportButton.addEventListener('click', async () => {
 });
 
 /* =================================================
-   ADMIN
+   ADMIN (convidar/promover/ativar/desativar/remover)
    ================================================= */
 async function loadProfiles() {
-  profilesBody.innerHTML = '<tr><td colspan="4">Carregando...</td></tr>';
+  profilesBody.innerHTML = '<tr><td colspan="5">Carregando...</td></tr>';
 
   const { data, error } = await supabase
     .from('profiles')
-    .select('id, email, role, created_at')
+    .select('id, email, role, active, created_at')
     .order('created_at', { ascending: false });
 
-  if (error) { profilesBody.innerHTML = `<tr><td colspan="4">Erro: ${error.message}</td></tr>`; return; }
-  if (!data?.length) { profilesBody.innerHTML = '<tr><td colspan="4">Nenhum perfil.</td></tr>'; return; }
+  if (error) { profilesBody.innerHTML = `<tr><td colspan="5">Erro: ${error.message}</td></tr>`; return; }
+  if (!data?.length) { profilesBody.innerHTML = '<tr><td colspan="5">Nenhum perfil.</td></tr>'; return; }
 
   profilesBody.innerHTML = '';
   data.forEach(p => {
     const tr = document.createElement('tr');
-    const badgeClass = p.role === 'admin' ? '' : 'member';
     tr.innerHTML = `
       <td>${p.email}</td>
-      <td><span class="role-badge ${badgeClass}">${p.role}</span></td>
+      <td><span class="role-badge ${p.role}">${p.role}</span></td>
+      <td>${p.active ? 'ATIVO' : 'INATIVO'}</td>
       <td>${new Date(p.created_at).toLocaleString()}</td>
       <td class="admin-row-actions">
+        <button class="btn toggle">${p.active ? 'Desativar' : 'Ativar'}</button>
         <button class="btn promote">Promover a Admin</button>
         <button class="btn demote">Tornar Membro</button>
         <button class="btn delete">Remover</button>
       </td>
     `;
 
+    tr.querySelector('.toggle').addEventListener('click', async () => {
+      if (!isAdmin()) return alert('Acesso negado.');
+      await supabase.from('profiles').update({ active: !p.active }).eq('email', p.email);
+      loadProfiles();
+    });
+
     tr.querySelector('.promote').addEventListener('click', async () => {
       if (!isAdmin()) return alert('Acesso negado.');
-      const { error } = await supabase.from('profiles').update({ role: 'admin' }).eq('id', p.id);
-      if (error) return alert('Erro: '+error.message);
+      await supabase.from('profiles').update({ role: 'admin', active: true }).eq('email', p.email);
       loadProfiles();
     });
 
     tr.querySelector('.demote').addEventListener('click', async () => {
       if (!isAdmin()) return alert('Acesso negado.');
-      const { error } = await supabase.from('profiles').update({ role: 'member' }).eq('id', p.id);
-      if (error) return alert('Erro: '+error.message);
+      await supabase.from('profiles').update({ role: 'member', active: true }).eq('email', p.email);
       loadProfiles();
     });
 
     tr.querySelector('.delete').addEventListener('click', async () => {
       if (!isAdmin()) return alert('Acesso negado.');
       if (!confirm(`Remover ${p.email}?`)) return;
-      const { error } = await supabase.from('profiles').delete().eq('id', p.id);
-      if (error) return alert('Erro: '+error.message);
+      await supabase.from('profiles').delete().eq('email', p.email);
       loadProfiles();
     });
 
@@ -336,14 +344,15 @@ async function loadProfiles() {
 
 addUserBtn?.addEventListener('click', async () => {
   if (!isAdmin()) return alert('Apenas administradores.');
-  const email = (newUserEmail.value||'').trim().toLowerCase();
+  const email = canon(newUserEmail.value);
   if (!email || !email.includes('@')) return alert('Informe um e-mail válido.');
 
-  const { data: exists } = await supabase.from('profiles').select('id').eq('email', email).maybeSingle();
-  if (exists?.id) return alert('E-mail já cadastrado.');
-
-  const { error } = await supabase.from('profiles').insert([{ email, role: 'member' }]);
-  if (error) return alert('Erro: '+error.message);
+  // convite explícito (unique por email no banco)
+  const { error } = await supabase.from('profiles').insert([{ email, role: 'member', active: true }]);
+  if (error && !String(error.message).includes('duplicate')) {
+    alert('Erro: ' + error.message);
+    return;
+  }
   newUserEmail.value = '';
   loadProfiles();
 });
@@ -351,18 +360,18 @@ addUserBtn?.addEventListener('click', async () => {
 /* =================================================
    LOGIN / LOGOUT / MODAIS
    ================================================= */
-fabAdmin.addEventListener('click', () => {
+fabAdmin?.addEventListener('click', () => {
   if (!isLoggedIn()) openModal('loginModal');
   else {
     accountTitle.textContent   = 'Conta';
-    accountSubtitle.textContent = `${currentUser.email} • ${currentRole.toUpperCase()}`;
+    accountSubtitle.textContent = `${currentUser.email} • ${(currentActive ? currentRole.toUpperCase() : 'VISITOR')}`;
     openModal('accountModal');
   }
 });
 
-userBadge.addEventListener('click', () => fabAdmin.click());
+userBadge?.addEventListener('click', () => fabAdmin?.click());
 
-loginButton.addEventListener('click', async () => {
+loginButton?.addEventListener('click', async () => {
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
     options: { redirectTo: window.location.origin }
@@ -371,18 +380,20 @@ loginButton.addEventListener('click', async () => {
   else if (data?.url) window.location.href = data.url;
 });
 
-logoutButton.addEventListener('click', async () => {
-  await supabase.auth.signOut();
-  currentUser = null; currentRole = 'visitor';
-  closeModal('accountModal');
+logoutButton?.addEventListener('click', async () => {
+  await supabase.auth.signOut();      // <-- LOGOUT FUNCIONANDO
+  currentUser = null;
+  currentRole = 'visitor';
+  currentActive = false;
   updateAuthUI();
+  closeModal('accountModal');
   await loadItems();
 });
 
-closeModalBtn.addEventListener('click', () => closeModal('loginModal'));
-closeAccountModal.addEventListener('click', () => closeModal('accountModal'));
+closeModalBtn?.addEventListener('click', () => closeModal('loginModal'));
+closeAccountModal?.addEventListener('click', () => closeModal('accountModal'));
 
-goAdminBtn.addEventListener('click', async () => {
+goAdminBtn?.addEventListener('click', async () => {
   if (!isAdmin()) return alert('Acesso negado.');
   adminPanel.style.display = 'block';
   closeModal('accountModal');
@@ -400,7 +411,5 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadItems();
   });
 });
-
-/* Botões de foto */
 btnUseCamera?.addEventListener('click', ()=> document.getElementById("itemPhotoCamera").click());
 btnUseGallery?.addEventListener('click', ()=> document.getElementById("itemPhotoGallery").click());
