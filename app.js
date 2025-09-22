@@ -111,14 +111,12 @@ async function refreshAuth() {
   const { data: { session } } = await supabase.auth.getSession();
   currentUser = session?.user || null;
 
-  // Define o padrão como visitante. Só muda se encontrar um perfil.
   currentRole = 'visitor';
   currentActive = false;
 
   if (currentUser?.email) {
     const email = canon(currentUser.email);
 
-    // Apenas PROCURA por um perfil. NUNCA cria um novo.
     const { data: prof, error } = await supabase
       .from('profiles')
       .select('id, role, active')
@@ -128,11 +126,8 @@ async function refreshAuth() {
     if (error) {
       console.error("Erro ao buscar perfil:", error.message);
     } else if (prof) {
-      // Se encontrou um perfil, atualiza as permissões
       currentRole   = prof.role || 'visitor';
       currentActive = !!prof.active;
-
-      // Se o usuário fez login pela primeira vez, associa o ID dele ao perfil
       if (!prof.id && currentUser.id) {
         await supabase.from('profiles').update({ id: currentUser.id }).eq('email', email);
       }
@@ -181,7 +176,6 @@ async function loadItems(filter = "") {
   });
 }
 
-// Lógica de envio do formulário (criar/editar)
 itemForm?.addEventListener('submit', async (e) => {
   e.preventDefault();
   if (!canWrite()) { openModal('loginModal'); return; }
@@ -215,7 +209,6 @@ itemForm?.addEventListener('submit', async (e) => {
       const { error: updErr } = await supabase.from('items').update(payload).eq('id', editingId);
       if (updErr) throw updErr;
 
-      // Apaga a foto antiga APENAS DEPOIS de atualizar o item com sucesso
       if (file && currentPhotoUrl) {
         const oldPath = pathFromPublicUrl(currentPhotoUrl);
         if (oldPath) await supabase.storage.from('item-photos').remove([oldPath]);
@@ -227,12 +220,10 @@ itemForm?.addEventListener('submit', async (e) => {
 
     await loadItems();
     itemForm.reset();
-
   } catch (err) {
     console.error('Erro ao salvar item:', err);
     alert(`Erro ao salvar: ${err.message}`);
   } finally {
-    // Bloco "finally" para garantir que o formulário NUNCA fique travado
     editingId = null;
     if (itemIdInput) itemIdInput.dataset.currentPhotoUrl = '';
     submitButton.disabled = false;
@@ -248,7 +239,7 @@ function editItem(item) {
   document.getElementById('itemName').value = item.name;
   document.getElementById('itemQuantity').value = item.quantity;
   document.getElementById('itemLocation').value = item.location;
-  document.getElementById('itemId').dataset.currentPhotoUrl = item.photo_url || ''; // Armazena a URL atual
+  document.getElementById('itemId').dataset.currentPhotoUrl = item.photo_url || '';
   editingId = item.id;
   submitButton.textContent = "Salvar Alterações";
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -264,6 +255,7 @@ async function deleteItem(item) {
     if (item.photo_url) {
       const path = pathFromPublicUrl(item.photo_url);
       if (path) {
+        // CORREÇÃO: Usar um array de caminhos para o método .remove()
         await supabase.storage.from('item-photos').remove([path]);
       }
     }
@@ -281,10 +273,8 @@ exportButton?.addEventListener('click', async () => {
   if (error) return alert('Erro ao exportar.');
   if (!data?.length) return alert('Nenhum item para exportar.');
   const rows = data.map(x => ({ Item:x.name, Quantidade:x.quantity, Local:x.location, Foto:x.photo_url||'Sem foto' }));
-  const ws = XLSX.utils.json_to_sheet(rows);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Inventário');
-  XLSX.writeFile(wb, 'inventario_kids.xlsx');
+  const ws = XLSX.utils.json_to_sheet(rows), wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Inventário'); XLSX.writeFile(wb, 'inventario_kids.xlsx');
 });
 
 /* =================================================
@@ -378,7 +368,6 @@ loginButton?.addEventListener('click', async () => {
 
 logoutButton?.addEventListener('click', async () => {
   await supabase.auth.signOut();
-  // O evento onAuthStateChange vai cuidar da atualização da UI
 });
 
 closeModalBtn?.addEventListener('click', () => closeModal('loginModal'));
@@ -403,7 +392,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadItems();
 
   supabase.auth.onAuthStateChange(async (event, session) => {
-    // Essa função será chamada sempre que o usuário logar ou deslogar
     await refreshAuth();
     await loadItems();
   });
