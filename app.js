@@ -1,18 +1,17 @@
-// app.js — Inventário Kids (versão final corrigida)
-// -----------------------------------------------------------------------------
+// app.js — Inventário Kids
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
 
-/* =================================================
-   CONFIGURAÇÃO SUPABASE (CHAVE CORRIGIDA)
-   ================================================= */
+/* ================================
+   SUPABASE
+=================================== */
 const SUPABASE_URL = "https://msvmsaznklubseypxsbs.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1zdm1zYXpua2x1YnNleXB4c2JzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgyMzQ4MzQsImV4cCI6MjA3MzgxMDgzNH0.ZGDD31UVRtwUEpDBkGg6q_jgV8JD_yXqWtuZ_1dprrw";
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-/* =================================================
-   ELEMENTOS DO DOM
-   ================================================= */
+/* ================================
+   DOM
+=================================== */
 const itemForm  = document.getElementById('itemForm');
 const itemList  = document.getElementById('itemList');
 const submitButton = document.getElementById('submitButton');
@@ -46,21 +45,22 @@ const profilesBody = document.getElementById('profilesBody');
 const addUserBtn   = document.getElementById('addUserBtn');
 const newUserEmail = document.getElementById('newUserEmail');
 
-/* =================================================
-   ESTADO DA APLICAÇÃO
-   ================================================= */
+/* ================================
+   ESTADO
+=================================== */
 let editingId = null;
 let currentUser = null;
 let currentRole = 'visitor';
 let currentActive = false;
+let isSubmitting = false;
 
 const isLoggedIn = () => !!currentUser;
 const canWrite   = () => currentActive && ['member','admin'].includes(currentRole);
 const isAdmin    = () => currentActive && currentRole === 'admin';
 
-/* =================================================
-   FUNÇÕES UTILITÁRIAS
-   ================================================= */
+/* ================================
+   UTIL
+=================================== */
 const openModal  = (id) => document.getElementById(id)?.classList.add('show');
 const closeModal = (id) => document.getElementById(id)?.classList.remove('show');
 const canon = (s) => (s||'').trim().toLowerCase();
@@ -104,13 +104,12 @@ function pathFromPublicUrl(url) {
   return null;
 }
 
-/* =================================================
-   AUTENTICAÇÃO (APENAS PARA CONVIDADOS)
-   ================================================= */
+/* ================================
+   AUTH
+=================================== */
 async function refreshAuth() {
   const { data: { session } } = await supabase.auth.getSession();
   currentUser = session?.user || null;
-
   currentRole = 'visitor';
   currentActive = false;
 
@@ -122,14 +121,15 @@ async function refreshAuth() {
       .eq('email', email)
       .maybeSingle();
 
-    if (error) {
-      console.error("Erro ao buscar perfil:", error.message);
-    } else if (prof) {
+    if (!error && prof) {
       currentRole   = prof.role || 'visitor';
       currentActive = !!prof.active;
+      // garante id vinculado ao auth (opcional)
       if (!prof.id && currentUser.id) {
         await supabase.from('profiles').update({ id: currentUser.id }).eq('email', email);
       }
+    } else if (error) {
+      console.error("Erro ao buscar perfil:", error.message);
     }
   }
   updateAuthUI();
@@ -141,9 +141,9 @@ function updateAuthUI() {
   setBadge(currentUser?.email || null, currentRole, currentActive);
 }
 
-/* =================================================
-   ITENS (CRUD ROBUSTO)
-   ================================================= */
+/* ================================
+   ITENS (CRUD)
+=================================== */
 async function loadItems(filter = "") {
   let q = supabase.from('items').select('*').order('created_at', { ascending: false });
   if (filter) q = q.ilike('name', `%${filter}%`);
@@ -175,14 +175,20 @@ async function loadItems(filter = "") {
   });
 }
 
+function getSelectedFile() {
+  return inputPhotoCamera.files[0] || inputPhotoGallery.files[0] || null;
+}
+
 itemForm?.addEventListener('submit', async (e) => {
   e.preventDefault();
   if (!canWrite()) { openModal('loginModal'); return; }
+  if (isSubmitting) return;
+  isSubmitting = true;
 
   const name = document.getElementById('itemName').value.trim();
   const quantity = Number(document.getElementById('itemQuantity').value) || 0;
   const location = document.getElementById('itemLocation').value.trim();
-  const file = inputPhotoCamera.files[0] || inputPhotoGallery.files[0] || null;
+  const fileRaw = getSelectedFile();
 
   const itemIdInput = document.getElementById('itemId');
   const currentPhotoUrl = itemIdInput?.dataset.currentPhotoUrl || null;
@@ -194,10 +200,10 @@ itemForm?.addEventListener('submit', async (e) => {
   try {
     let photo_url = currentPhotoUrl;
 
-    if (file) {
-      const compressed = await compressImage(file, 800, 0.7);
-      const fileName = `${Date.now()}-${compressed.name}`;
-      const { data: up, error: upErr } = await supabase.storage.from('item-photos').upload(fileName, compressed);
+    if (fileRaw) {
+      const file = await compressImage(fileRaw, 800, 0.7);
+      const fileName = `${Date.now()}-${file.name}`;
+      const { data: up, error: upErr } = await supabase.storage.from('item-photos').upload(fileName, file);
       if (upErr) throw upErr;
       photo_url = `${SUPABASE_URL}/storage/v1/object/public/item-photos/${up.path}`;
     }
@@ -208,7 +214,8 @@ itemForm?.addEventListener('submit', async (e) => {
       const { error: updErr } = await supabase.from('items').update(payload).eq('id', editingId);
       if (updErr) throw updErr;
 
-      if (file && currentPhotoUrl) {
+      // apaga a foto antiga só se trocou a foto
+      if (fileRaw && currentPhotoUrl) {
         const oldPath = pathFromPublicUrl(currentPhotoUrl);
         if (oldPath) await supabase.storage.from('item-photos').remove([oldPath]);
       }
@@ -229,6 +236,7 @@ itemForm?.addEventListener('submit', async (e) => {
     submitButton.textContent = 'Cadastrar';
     inputPhotoCamera.value = "";
     inputPhotoGallery.value = "";
+    isSubmitting = false;
   }
 });
 
@@ -253,9 +261,7 @@ async function deleteItem(item) {
 
     if (item.photo_url) {
       const path = pathFromPublicUrl(item.photo_url);
-      if (path) {
-        await supabase.storage.from('item-photos').remove([path]);
-      }
+      if (path) await supabase.storage.from('item-photos').remove([path]);
     }
     await loadItems();
   } catch (err) {
@@ -275,9 +281,9 @@ exportButton?.addEventListener('click', async () => {
   XLSX.utils.book_append_sheet(wb, ws, 'Inventário'); XLSX.writeFile(wb, 'inventario_kids.xlsx');
 });
 
-/* =================================================
-   PAINEL ADMIN
-   ================================================= */
+/* ================================
+   ADMIN
+=================================== */
 async function loadProfiles() {
   profilesBody.innerHTML = '<tr><td colspan="5">Carregando...</td></tr>';
   const { data, error } = await supabase
@@ -332,19 +338,16 @@ addUserBtn?.addEventListener('click', async () => {
   if (!isAdmin()) return alert('Apenas administradores.');
   const email = canon(newUserEmail.value);
   if (!email || !email.includes('@')) return alert('Informe um e-mail válido.');
-
   const { error } = await supabase.from('profiles').insert([{ email, role: 'member', active: true }]);
   if (error && !String(error.message).toLowerCase().includes('duplicate')) {
-    alert('Erro: ' + error.message);
-    return;
+    alert('Erro: ' + error.message); return;
   }
-  newUserEmail.value = '';
-  loadProfiles();
+  newUserEmail.value = ''; loadProfiles();
 });
 
-/* =================================================
+/* ================================
    LOGIN / LOGOUT / MODAIS
-   ================================================= */
+=================================== */
 const handleAuthClick = () => {
   if (!isLoggedIn()) {
     openModal('loginModal');
@@ -379,9 +382,9 @@ goAdminBtn?.addEventListener('click', async () => {
   window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
 });
 
-/* =================================================
+/* ================================
    INICIALIZAÇÃO
-   ================================================= */
+=================================== */
 document.addEventListener('DOMContentLoaded', async () => {
   btnUseCamera?.addEventListener('click', () => inputPhotoCamera.click());
   btnUseGallery?.addEventListener('click', () => inputPhotoGallery.click());
@@ -389,9 +392,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   await refreshAuth();
   await loadItems();
 
-  supabase.auth.onAuthStateChange(async (event, session) => {
+  supabase.auth.onAuthStateChange(async () => {
     await refreshAuth();
     await loadItems();
   });
 });
-

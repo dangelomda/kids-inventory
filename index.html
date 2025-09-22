@@ -16,7 +16,7 @@
     <img src="public/logo.svg" alt="Logo Inventário Kids" class="logo" />
     <h1>Inventário Kids</h1>
 
-    <!-- Badge oficial (apenas 1) -->
+    <!-- Badge oficial -->
     <button class="user-badge" id="userBadge" title="Conta">
       <span id="userBadgeText">VISITOR</span>
       <span class="dot visitor" id="userBadgeDot"></span>
@@ -55,7 +55,9 @@
 
         <button type="submit" id="submitButton">Cadastrar</button>
       </form>
-      <p class="hint" id="visitorHint" style="display:none;">Apenas leitura para visitantes. Entre como admin para cadastrar/editar/excluir.</p>
+      <p class="hint" id="visitorHint" style="display:none;">
+        Apenas leitura para visitantes. Entre como admin para cadastrar/editar/excluir.
+      </p>
     </section>
 
     <!-- Lista e Busca -->
@@ -71,7 +73,7 @@
       </div>
     </section>
 
-    <!-- Painel Admin (don@ pode listar/gerir perfis) -->
+    <!-- Painel Admin -->
     <section id="adminPanel" class="admin-panel" style="display:none;">
       <h2>Painel Admin</h2>
 
@@ -88,6 +90,7 @@
             <tr>
               <th>Email</th>
               <th>Função</th>
+              <th>Status</th>
               <th>Criado em</th>
               <th>Ações</th>
             </tr>
