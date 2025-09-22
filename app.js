@@ -7,7 +7,7 @@ import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
    CONFIGURAÇÃO SUPABASE
    ================================================= */
 const SUPABASE_URL = "https://msvmsaznklubseypxsbs.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1zdm1zYXpua2x1YnNleXB4c2JzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgyMzQ4MzQsImV4cCI6MjA3MzgxMDgzNH0.ZGDD31UVRtwUEpDBkGg6q_jgV8JD_yXqWtuZ_1dprrw";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1zdm1zYXpua2x1YnNleXB4c2JzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgyMzQ4MzQsImV4cCI6MjA3MzgxMDgzNH0.ZGDD31UVRtwUEpDBkGg6q_jgV8JD_yXqWtuZ_1dprrw";
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 /* =================================================
@@ -181,7 +181,7 @@ async function loadItems(filter = "") {
   });
 }
 
-// <-- MELHORIA: Lógica de envio do formulário mais robusta para evitar congelamento
+// Lógica de envio do formulário (criar/editar)
 itemForm?.addEventListener('submit', async (e) => {
   e.preventDefault();
   if (!canWrite()) { openModal('loginModal'); return; }
@@ -215,7 +215,7 @@ itemForm?.addEventListener('submit', async (e) => {
       const { error: updErr } = await supabase.from('items').update(payload).eq('id', editingId);
       if (updErr) throw updErr;
 
-      // <-- CORREÇÃO: Apaga a foto antiga APENAS DEPOIS de atualizar o item com sucesso
+      // Apaga a foto antiga APENAS DEPOIS de atualizar o item com sucesso
       if (file && currentPhotoUrl) {
         const oldPath = pathFromPublicUrl(currentPhotoUrl);
         if (oldPath) await supabase.storage.from('item-photos').remove([oldPath]);
@@ -232,7 +232,7 @@ itemForm?.addEventListener('submit', async (e) => {
     console.error('Erro ao salvar item:', err);
     alert(`Erro ao salvar: ${err.message}`);
   } finally {
-    // <-- CORREÇÃO: Bloco "finally" para garantir que o formulário NUNCA fique travado
+    // Bloco "finally" para garantir que o formulário NUNCA fique travado
     editingId = null;
     if (itemIdInput) itemIdInput.dataset.currentPhotoUrl = '';
     submitButton.disabled = false;
@@ -258,7 +258,6 @@ async function deleteItem(item) {
   if (!canWrite()) { openModal('loginModal'); return; }
   if (!confirm(`Excluir "${item.name}"?`)) return;
   try {
-    // <-- MELHORIA: A ordem já estava correta, mas foi mantida e garantida
     const { error: delErr } = await supabase.from('items').delete().eq('id', item.id);
     if (delErr) throw delErr;
 
@@ -409,3 +408,4 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadItems();
   });
 });
+
