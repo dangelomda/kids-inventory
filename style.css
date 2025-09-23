@@ -302,9 +302,12 @@ input:focus { border-color: #4A90E2; box-shadow: 0 0 4px rgba(74,144,226,.3); }
   .photo-buttons { flex-direction: column; }
   .admin-row-actions { flex-direction: row; }
 
-  /* badge fixo no topo no celular */
-  .user-badge{
-    top: 8px !important;
-    transform: none !important;
+  /* badge abaixo do header no celular */
+  .user-badge {
+    position: static !important;   /* sai do absoluto */
+    margin: 8px auto 0 auto;       /* centraliza abaixo do header */
+    display: flex;
+    justify-content: center;
   }
 }
+
