@@ -1,4 +1,4 @@
-// app.js — Inventário Kids
+// app.js — Inventário Kids (com realtime em profiles, photo_key, login/logout robustos)
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
 
@@ -8,6 +8,7 @@ import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
 const SUPABASE_URL = "https://msvmsaznklubseypxsbs.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1zdm1zYXpua2x1YnNleXB4c2JzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgyMzQ4MzQsImV4cCI6MjA3MzgxMDgzNH0.ZGDD31UVRtwUEpDBkGg6q_jgV8JD_yXqWtuZ_1dprrw";
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+const BUCKET = 'item-photos';
 
 /* ================================
    DOM
@@ -53,6 +54,7 @@ let currentUser = null;
 let currentRole = 'visitor';
 let currentActive = false;
 let isSubmitting = false;
+let currentSearch = '';
 
 const isLoggedIn = () => !!currentUser;
 const canWrite   = () => currentActive && ['member','admin'].includes(currentRole);
@@ -66,6 +68,7 @@ const closeModal = (id) => document.getElementById(id)?.classList.remove('show')
 const canon = (s) => (s||'').trim().toLowerCase();
 
 function setBadge(email, role, active) {
+  if (!userBadgeText || !userBadgeDot) return;
   const r = (role || 'visitor').toLowerCase();
   const tag = active ? r.toUpperCase() : 'VISITOR';
   userBadgeText.textContent = email ? `${email} • ${tag}` : 'VISITOR';
@@ -93,15 +96,31 @@ async function compressImage(file, maxWidth = 800, quality = 0.7) {
   });
 }
 
-function pathFromPublicUrl(url) {
-  if (!url) return null;
-  try {
-    const u = new URL(url);
-    const parts = u.pathname.split('/');
-    const idx = parts.indexOf('item-photos');
-    if (idx >= 0 && idx < parts.length - 1) return parts.slice(idx + 1).join('/');
-  } catch (e) { console.error("Erro ao extrair caminho da URL:", e); }
-  return null;
+function getSelectedFile() {
+  return inputPhotoCamera?.files?.[0] || inputPhotoGallery?.files?.[0] || null;
+}
+
+/* ================================
+   STORAGE helpers (usa photo_key)
+=================================== */
+function makeKey() {
+  const rnd = crypto?.randomUUID?.() || Math.random().toString(36).slice(2);
+  return `${rnd}-${Date.now()}.jpg`;
+}
+function publicUrlFromKey(key) {
+  const { data } = supabase.storage.from(BUCKET).getPublicUrl(key);
+  return `${data.publicUrl}?v=${Date.now()}`; // cache-bust
+}
+async function uploadPhotoAndGetRefs(file) {
+  const key = makeKey();
+  const { error: upErr } = await supabase.storage.from(BUCKET).upload(key, file);
+  if (upErr) throw upErr;
+  return { photo_key: key, photo_url: publicUrlFromKey(key) };
+}
+async function removeByKey(key) {
+  if (!key) return;
+  const { error } = await supabase.storage.from(BUCKET).remove([key]);
+  if (error) console.warn('Falha ao remover do Storage:', key, error.message);
 }
 
 /* ================================
@@ -117,24 +136,19 @@ async function refreshAuth() {
     const email = canon(currentUser.email);
     const { data: prof, error } = await supabase
       .from('profiles')
-      .select('id, role, active')
+      .select('role, active')
       .eq('email', email)
       .maybeSingle();
 
     if (!error && prof) {
       currentRole   = prof.role || 'visitor';
       currentActive = !!prof.active;
-      // garante id vinculado ao auth (opcional)
-      if (!prof.id && currentUser.id) {
-        await supabase.from('profiles').update({ id: currentUser.id }).eq('email', email);
-      }
     } else if (error) {
       console.error("Erro ao buscar perfil:", error.message);
     }
   }
   updateAuthUI();
 }
-
 function updateAuthUI() {
   if (visitorHint) visitorHint.style.display = canWrite() ? 'none' : 'block';
   if (goAdminBtn)  goAdminBtn.style.display  = isAdmin() ? 'block' : 'none';
@@ -142,7 +156,7 @@ function updateAuthUI() {
 }
 
 /* ================================
-   ITENS (CRUD)
+   ITENS (CRUD) — com photo_key
 =================================== */
 async function loadItems(filter = "") {
   let q = supabase.from('items').select('*').order('created_at', { ascending: false });
@@ -175,10 +189,6 @@ async function loadItems(filter = "") {
   });
 }
 
-function getSelectedFile() {
-  return inputPhotoCamera.files[0] || inputPhotoGallery.files[0] || null;
-}
-
 itemForm?.addEventListener('submit', async (e) => {
   e.preventDefault();
   if (!canWrite()) { openModal('loginModal'); return; }
@@ -188,65 +198,65 @@ itemForm?.addEventListener('submit', async (e) => {
   const name = document.getElementById('itemName').value.trim();
   const quantity = Number(document.getElementById('itemQuantity').value) || 0;
   const location = document.getElementById('itemLocation').value.trim();
-  const fileRaw = getSelectedFile();
 
-  const itemIdInput = document.getElementById('itemId');
-  const currentPhotoUrl = itemIdInput?.dataset.currentPhotoUrl || null;
+  const idInput = document.getElementById('itemId');
   const isEdit = !!editingId;
+
+  const currentPhotoKey = idInput?.dataset.currentPhotoKey || null;
+  const fileRaw = getSelectedFile();
 
   submitButton.disabled = true;
   submitButton.textContent = isEdit ? 'Salvando...' : 'Cadastrando...';
 
   try {
-    let photo_url = currentPhotoUrl;
+    let payload = { name, quantity, location };
 
     if (fileRaw) {
       const file = await compressImage(fileRaw, 800, 0.7);
-      const fileName = `${Date.now()}-${file.name}`;
-      const { data: up, error: upErr } = await supabase.storage.from('item-photos').upload(fileName, file);
-      if (upErr) throw upErr;
-      photo_url = `${SUPABASE_URL}/storage/v1/object/public/item-photos/${up.path}`;
+      const { photo_key, photo_url } = await uploadPhotoAndGetRefs(file);
+      payload.photo_key = photo_key;
+      payload.photo_url = photo_url;
     }
-
-    const payload = { name, quantity, location, photo_url };
 
     if (isEdit) {
       const { error: updErr } = await supabase.from('items').update(payload).eq('id', editingId);
-      if (updErr) throw updErr;
-
-      // apaga a foto antiga só se trocou a foto
-      if (fileRaw && currentPhotoUrl) {
-        const oldPath = pathFromPublicUrl(currentPhotoUrl);
-        if (oldPath) await supabase.storage.from('item-photos').remove([oldPath]);
+      if (updErr) {
+        if (payload.photo_key) await removeByKey(payload.photo_key);
+        throw updErr;
       }
+      if (fileRaw && currentPhotoKey) await removeByKey(currentPhotoKey);
     } else {
       const { error: insErr } = await supabase.from('items').insert([payload]);
-      if (insErr) throw insErr;
+      if (insErr) {
+        if (payload.photo_key) await removeByKey(payload.photo_key);
+        throw insErr;
+      }
     }
 
-    await loadItems();
     itemForm.reset();
+    if (inputPhotoCamera) inputPhotoCamera.value = "";
+    if (inputPhotoGallery) inputPhotoGallery.value = "";
   } catch (err) {
     console.error('Erro ao salvar item:', err);
-    alert(`Erro ao salvar: ${err.message}`);
+    alert(`Erro ao salvar: ${err.message || err}`);
   } finally {
     editingId = null;
-    if (itemIdInput) itemIdInput.dataset.currentPhotoUrl = '';
+    if (idInput) { idInput.dataset.currentPhotoKey = ''; idInput.dataset.currentPhotoUrl = ''; }
     submitButton.disabled = false;
     submitButton.textContent = 'Cadastrar';
-    inputPhotoCamera.value = "";
-    inputPhotoGallery.value = "";
     isSubmitting = false;
+    await loadItems(currentSearch);
   }
 });
 
 function editItem(item) {
   if (!canWrite()) { openModal('loginModal'); return; }
   document.getElementById('itemId').value = item.id;
+  document.getElementById('itemId').dataset.currentPhotoKey = item.photo_key || '';
+  document.getElementById('itemId').dataset.currentPhotoUrl = item.photo_url || '';
   document.getElementById('itemName').value = item.name;
   document.getElementById('itemQuantity').value = item.quantity;
   document.getElementById('itemLocation').value = item.location;
-  document.getElementById('itemId').dataset.currentPhotoUrl = item.photo_url || '';
   editingId = item.id;
   submitButton.textContent = "Salvar Alterações";
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -258,20 +268,17 @@ async function deleteItem(item) {
   try {
     const { error: delErr } = await supabase.from('items').delete().eq('id', item.id);
     if (delErr) throw delErr;
-
-    if (item.photo_url) {
-      const path = pathFromPublicUrl(item.photo_url);
-      if (path) await supabase.storage.from('item-photos').remove([path]);
-    }
-    await loadItems();
+    if (item.photo_key) await removeByKey(item.photo_key);
   } catch (err) {
     console.error("Erro ao deletar:", err);
-    alert(`Não foi possível deletar: ${err.message}`);
+    alert(`Não foi possível deletar: ${err.message || err}`);
+  } finally {
+    await loadItems(currentSearch);
   }
 }
 
 /* Busca & Exportar */
-searchInput?.addEventListener('input', (e)=> loadItems(e.target.value.trim()));
+searchInput?.addEventListener('input', (e)=> { currentSearch = e.target.value.trim(); loadItems(currentSearch); });
 exportButton?.addEventListener('click', async () => {
   const { data, error } = await supabase.from('items').select('*').order('created_at', { ascending: false });
   if (error) return alert('Erro ao exportar.');
@@ -282,13 +289,14 @@ exportButton?.addEventListener('click', async () => {
 });
 
 /* ================================
-   ADMIN
+   ADMIN (profiles) + Realtime
 =================================== */
 async function loadProfiles() {
+  if (!profilesBody) return;
   profilesBody.innerHTML = '<tr><td colspan="5">Carregando...</td></tr>';
   const { data, error } = await supabase
     .from('profiles')
-    .select('id, email, role, active, created_at')
+    .select('email, role, active, created_at')
     .order('created_at', { ascending: false });
 
   if (error) { profilesBody.innerHTML = `<tr><td colspan="5">Erro: ${error.message}</td></tr>`; return; }
@@ -309,22 +317,22 @@ async function loadProfiles() {
         <button class="btn delete">Remover</button>
       </td>
     `;
-    tr.querySelector('.toggle').addEventListener('click', async () => {
+    tr.querySelector('.toggle')?.addEventListener('click', async () => {
       if (!isAdmin()) return alert('Acesso negado.');
       await supabase.from('profiles').update({ active: !p.active }).eq('email', p.email);
       loadProfiles();
     });
-    tr.querySelector('.promote').addEventListener('click', async () => {
+    tr.querySelector('.promote')?.addEventListener('click', async () => {
       if (!isAdmin()) return alert('Acesso negado.');
       await supabase.from('profiles').update({ role: 'admin', active: true }).eq('email', p.email);
       loadProfiles();
     });
-    tr.querySelector('.demote').addEventListener('click', async () => {
+    tr.querySelector('.demote')?.addEventListener('click', async () => {
       if (!isAdmin()) return alert('Acesso negado.');
       await supabase.from('profiles').update({ role: 'member', active: true }).eq('email', p.email);
       loadProfiles();
     });
-    tr.querySelector('.delete').addEventListener('click', async () => {
+    tr.querySelector('.delete')?.addEventListener('click', async () => {
       if (!isAdmin()) return alert('Acesso negado.');
       if (!confirm(`Remover ${p.email}?`)) return;
       await supabase.from('profiles').delete().eq('email', p.email);
@@ -333,6 +341,23 @@ async function loadProfiles() {
     profilesBody.appendChild(tr);
   });
 }
+
+/* Realtime: items (já atualiza a lista) e profiles (admin + badge) */
+supabase
+  .channel('items-realtime')
+  .on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, () => {
+    loadItems(currentSearch);
+  })
+  .subscribe();
+
+const isPanelOpen = () => adminPanel && adminPanel.style.display !== 'none';
+supabase
+  .channel('profiles-realtime')
+  .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, async () => {
+    if (isPanelOpen() && isAdmin()) await loadProfiles();
+    await refreshAuth(); // atualiza badge/role imediatamente
+  })
+  .subscribe();
 
 addUserBtn?.addEventListener('click', async () => {
   if (!isAdmin()) return alert('Apenas administradores.');
@@ -352,8 +377,8 @@ const handleAuthClick = () => {
   if (!isLoggedIn()) {
     openModal('loginModal');
   } else {
-    accountTitle.textContent   = 'Conta';
-    accountSubtitle.textContent = `${currentUser.email} • ${(currentActive ? currentRole.toUpperCase() : 'VISITOR')}`;
+    if (accountTitle) accountTitle.textContent = 'Conta';
+    if (accountSubtitle) accountSubtitle.textContent = `${currentUser.email} • ${(currentActive ? currentRole.toUpperCase() : 'VISITOR')}`;
     openModal('accountModal');
   }
 };
@@ -363,12 +388,24 @@ userBadge?.addEventListener('click', handleAuthClick);
 loginButton?.addEventListener('click', async () => {
   await supabase.auth.signInWithOAuth({
     provider: 'google',
-    options: { redirectTo: window.location.origin }
+    options: {
+      redirectTo: window.location.origin,
+      queryParams: { prompt: 'select_account' } // força escolher conta
+    }
   });
 });
 
 logoutButton?.addEventListener('click', async () => {
-  await supabase.auth.signOut();
+  try { await supabase.auth.signOut(); }
+  catch (e) { console.error('Erro no signOut:', e); }
+  finally {
+    editingId = null;
+    itemForm?.reset();
+    if (adminPanel) adminPanel.style.display = 'none';
+    closeModal('accountModal');
+    await refreshAuth();
+    await loadItems();
+  }
 });
 
 closeModalBtn?.addEventListener('click', () => closeModal('loginModal'));
@@ -386,8 +423,8 @@ goAdminBtn?.addEventListener('click', async () => {
    INICIALIZAÇÃO
 =================================== */
 document.addEventListener('DOMContentLoaded', async () => {
-  btnUseCamera?.addEventListener('click', () => inputPhotoCamera.click());
-  btnUseGallery?.addEventListener('click', () => inputPhotoGallery.click());
+  btnUseCamera?.addEventListener('click', () => inputPhotoCamera?.click());
+  btnUseGallery?.addEventListener('click', () => inputPhotoGallery?.click());
 
   await refreshAuth();
   await loadItems();

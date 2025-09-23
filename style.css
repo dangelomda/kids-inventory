@@ -17,7 +17,7 @@ header {
   align-items: center;
   justify-content: center;
   gap: 12px;
-  position: relative;            /* para posicionar o badge à direita */
+  position: relative;            /* para posicionar o badge */
 }
 header .logo {
   height: 45px;
@@ -301,4 +301,10 @@ input:focus { border-color: #4A90E2; box-shadow: 0 0 4px rgba(74,144,226,.3); }
 @media (max-width: 480px) {
   .photo-buttons { flex-direction: column; }
   .admin-row-actions { flex-direction: row; }
+
+  /* badge fixo no topo no celular */
+  .user-badge{
+    top: 8px !important;
+    transform: none !important;
+  }
 }
