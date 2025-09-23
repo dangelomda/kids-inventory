@@ -472,6 +472,11 @@ logoutButton?.addEventListener('click', async () => {
     closeModal('accountModal');
     await refreshAuth();
     loadItems();
+
+    // 🔑 força também o logout da sessão Google
+    setTimeout(() => {
+      window.location.href = "https://accounts.google.com/Logout";
+    }, 500);
   }
 });
 
