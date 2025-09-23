@@ -485,13 +485,18 @@ closeAccountModal?.addEventListener('click', () => closeModal('accountModal'));
 
 /* Abrir painel Admin — SEM “carregando infinito” */
 goAdminBtn?.addEventListener('click', async () => {
-  await refreshAuth();                 // garante papel atualizado
+  await refreshAuth(); // garante papel atualizado
   if (!isAdmin()) return alert('Acesso negado.');
-  if (adminPanel) adminPanel.style.display = 'block';
-  closeModal('accountModal');
-  await loadProfiles();                // carrega perfis já com RLS correta
+
+  closeModal('accountModal'); // fecha modal da conta primeiro
+  if (adminPanel) {
+    adminPanel.style.display = 'block'; // exibe painel imediatamente
+    await loadProfiles();               // carrega dados só depois que está visível
+  }
+
   window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
 });
+
 
 /* ================================
    INICIALIZAÇÃO
