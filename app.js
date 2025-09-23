@@ -1,4 +1,4 @@
-// app.js — Inventário Kids (versão oficial unificada)
+// app.js — Inventário Kids (versão oficial unificada, COMPLETA e corrigida)
 // - Auth (Google) + profiles (role/active) + badge
 // - Items com photo_key (sem lixo no storage)
 // - Realtime estável (load com debounce)
@@ -70,15 +70,11 @@ const isAdmin    = () => currentActive && currentRole === 'admin';
 /* ================================
    HELPERS
 =================================== */
-const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
 const canon = (s) => (s||'').trim().toLowerCase();
 
 function debounce(fn, wait = 300) {
   let t;
-  return (...args) => {
-    clearTimeout(t);
-    t = setTimeout(() => fn(...args), wait);
-  };
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), wait); };
 }
 
 const openModal  = (id) => document.getElementById(id)?.classList.add('show');
@@ -121,7 +117,7 @@ function getSelectedFile() {
 }
 
 /* ================================
-   STORAGE (photo_key)
+   STORAGE helpers (usa photo_key)
 =================================== */
 function makeKey() {
   const rnd = crypto?.randomUUID?.() || Math.random().toString(36).slice(2);
@@ -129,8 +125,7 @@ function makeKey() {
 }
 function publicUrlFromKey(key) {
   const { data } = supabase.storage.from(BUCKET).getPublicUrl(key);
-  // cache-bust
-  return `${data.publicUrl}?v=${Date.now()}`;
+  return `${data.publicUrl}?v=${Date.now()}`; // cache-bust
 }
 async function uploadPhotoAndGetRefs(file) {
   const key = makeKey();
@@ -178,7 +173,7 @@ function updateAuthUI() {
 }
 
 /* ================================
-   ITEMS (CRUD) — com photo_key
+   ITENS (CRUD) — com photo_key
 =================================== */
 async function _loadItems(filter = "") {
   let q = supabase.from('items').select('*').order('created_at', { ascending: false });
@@ -248,25 +243,20 @@ itemForm?.addEventListener('submit', async (e) => {
     }
 
     if (isEdit) {
-      // Atualiza item
       const { error: updErr } = await supabase.from('items').update(payload).eq('id', editingId);
       if (updErr) {
-        // Desfaz upload novo se o update falhar
         if (payload.photo_key) await removeByKey(payload.photo_key);
         throw updErr;
       }
-      // Remove foto antiga do storage somente após update OK
       if (fileRaw && currentPhotoKey) await removeByKey(currentPhotoKey);
     } else {
       const { error: insErr } = await supabase.from('items').insert([payload]);
       if (insErr) {
-        // Desfaz upload se insert falhar
         if (payload.photo_key) await removeByKey(payload.photo_key);
         throw insErr;
       }
     }
 
-    // limpa form
     itemForm.reset();
     if (inputPhotoCamera) inputPhotoCamera.value = "";
     if (inputPhotoGallery) inputPhotoGallery.value = "";
@@ -299,10 +289,8 @@ async function deleteItem(item) {
   if (!canWrite()) { openModal('loginModal'); return; }
   if (!confirm(`Excluir "${item.name}"?`)) return;
   try {
-    // 1) apaga no banco
     const { error: delErr } = await supabase.from('items').delete().eq('id', item.id);
     if (delErr) throw delErr;
-    // 2) depois apaga do storage (se existir)
     if (item.photo_key) await removeByKey(item.photo_key);
   } catch (err) {
     console.error("Erro ao deletar:", err);
@@ -314,7 +302,6 @@ async function deleteItem(item) {
 
 /* Busca & Exportar */
 searchInput?.addEventListener('input', (e)=> loadItems(e.target.value.trim()));
-
 exportButton?.addEventListener('click', async () => {
   const { data, error } = await supabase.from('items').select('*').order('created_at', { ascending: false });
   if (error) return alert('Erro ao exportar.');
@@ -330,55 +317,88 @@ exportButton?.addEventListener('click', async () => {
 async function loadProfiles() {
   if (!profilesBody) return;
   profilesBody.innerHTML = '<tr><td colspan="5">Carregando...</td></tr>';
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('email, role, active, created_at')
-    .order('created_at', { ascending: false });
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('email, role, active, created_at')
+      .order('created_at', { ascending: false });
 
-  if (error) { profilesBody.innerHTML = `<tr><td colspan="5">Erro: ${error.message}</td></tr>`; return; }
-  if (!data?.length) { profilesBody.innerHTML = '<tr><td colspan="5">Nenhum perfil.</td></tr>'; return; }
+    if (error) { profilesBody.innerHTML = `<tr><td colspan="5">Erro: ${error.message}</td></tr>`; return; }
+    if (!data?.length) { profilesBody.innerHTML = '<tr><td colspan="5">Nenhum perfil.</td></tr>'; return; }
 
-  profilesBody.innerHTML = '';
-  data.forEach(p => {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${p.email}</td>
-      <td><span class="role-badge ${p.role}">${p.role}</span></td>
-      <td>${p.active ? 'ATIVO' : 'INATIVO'}</td>
-      <td>${new Date(p.created_at).toLocaleString()}</td>
-      <td class="admin-row-actions">
-        <button class="btn toggle">${p.active ? 'Desativar' : 'Ativar'}</button>
-        <button class="btn promote">Promover a Admin</button>
-        <button class="btn demote">Tornar Membro</button>
-        <button class="btn delete">Remover</button>
-      </td>
-    `;
-    tr.querySelector('.toggle')?.addEventListener('click', async () => {
-      if (!isAdmin()) return alert('Acesso negado.');
-      await supabase.from('profiles').update({ active: !p.active }).eq('email', p.email);
-      loadProfiles();
+    profilesBody.innerHTML = '';
+    data.forEach(p => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${p.email}</td>
+        <td><span class="role-badge ${p.role}">${p.role}</span></td>
+        <td>${p.active ? 'ATIVO' : 'INATIVO'}</td>
+        <td>${new Date(p.created_at).toLocaleString()}</td>
+        <td class="admin-row-actions">
+          <button class="btn toggle">${p.active ? 'Desativar' : 'Ativar'}</button>
+          <button class="btn promote">Promover a Admin</button>
+          <button class="btn demote">Tornar Membro</button>
+          <button class="btn delete">Remover</button>
+        </td>
+      `;
+
+      tr.querySelector('.toggle')?.addEventListener('click', async () => {
+        try {
+          if (!isAdmin()) return alert('Acesso negado.');
+          await supabase.from('profiles').update({ active: !p.active }).eq('email', p.email);
+        } catch (e) {
+          alert(e.message || e);
+        } finally {
+          await refreshAuth();
+          await loadProfiles();
+        }
+      });
+
+      tr.querySelector('.promote')?.addEventListener('click', async () => {
+        try {
+          if (!isAdmin()) return alert('Acesso negado.');
+          await supabase.from('profiles').update({ role: 'admin', active: true }).eq('email', p.email);
+        } catch (e) {
+          alert(e.message || e);
+        } finally {
+          await refreshAuth();
+          await loadProfiles();
+        }
+      });
+
+      tr.querySelector('.demote')?.addEventListener('click', async () => {
+        try {
+          if (!isAdmin()) return alert('Acesso negado.');
+          await supabase.from('profiles').update({ role: 'member', active: true }).eq('email', p.email);
+        } catch (e) {
+          alert(e.message || e);
+        } finally {
+          await refreshAuth();
+          await loadProfiles();
+        }
+      });
+
+      tr.querySelector('.delete')?.addEventListener('click', async () => {
+        try {
+          if (!isAdmin()) return alert('Acesso negado.');
+          if (!confirm(`Remover ${p.email}?`)) return;
+          await supabase.from('profiles').delete().eq('email', p.email);
+        } catch (e) {
+          alert(e.message || e);
+        } finally {
+          await refreshAuth();
+          await loadProfiles();
+        }
+      });
+
+      profilesBody.appendChild(tr);
     });
-    tr.querySelector('.promote')?.addEventListener('click', async () => {
-      if (!isAdmin()) return alert('Acesso negado.');
-      await supabase.from('profiles').update({ role: 'admin', active: true }).eq('email', p.email);
-      loadProfiles();
-    });
-    tr.querySelector('.demote')?.addEventListener('click', async () => {
-      if (!isAdmin()) return alert('Acesso negado.');
-      await supabase.from('profiles').update({ role: 'member', active: true }).eq('email', p.email);
-      loadProfiles();
-    });
-    tr.querySelector('.delete')?.addEventListener('click', async () => {
-      if (!isAdmin()) return alert('Acesso negado.');
-      if (!confirm(`Remover ${p.email}?`)) return;
-      await supabase.from('profiles').delete().eq('email', p.email);
-      loadProfiles();
-    });
-    profilesBody.appendChild(tr);
-  });
+  } catch (e) {
+    profilesBody.innerHTML = `<tr><td colspan="5">Erro inesperado.</td></tr>`;
+  }
 }
 
-// Realtime (usar sempre o loader DEBOUNCED)
+/* Realtime: items e profiles (sempre usando loaders) */
 supabase
   .channel('items-realtime')
   .on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, () => {
@@ -395,15 +415,26 @@ supabase
   })
   .subscribe();
 
+/* Adicionar membro — UPSERT idempotente + refresh */
 addUserBtn?.addEventListener('click', async () => {
+  await refreshAuth();
   if (!isAdmin()) return alert('Apenas administradores.');
   const email = canon(newUserEmail.value);
   if (!email || !email.includes('@')) return alert('Informe um e-mail válido.');
-  const { error } = await supabase.from('profiles').insert([{ email, role: 'member', active: true }]);
-  if (error && !String(error.message).toLowerCase().includes('duplicate')) {
-    alert('Erro: ' + error.message); return;
+
+  try {
+    const { error } = await supabase
+      .from('profiles')
+      .upsert([{ email, role: 'member', active: true }], { onConflict: 'email', ignoreDuplicates: true });
+    if (error) throw error;
+  } catch (err) {
+    alert('Erro ao adicionar: ' + (err.message || err));
+    console.error(err);
+  } finally {
+    newUserEmail.value = '';
+    await refreshAuth();
+    await loadProfiles();
   }
-  newUserEmail.value = ''; loadProfiles();
 });
 
 /* ================================
@@ -426,7 +457,7 @@ loginButton?.addEventListener('click', async () => {
     provider: 'google',
     options: {
       redirectTo: window.location.origin,
-      queryParams: { prompt: 'select_account' } // força escolher conta
+      queryParams: { prompt: 'select_account' }
     }
   });
 });
@@ -447,11 +478,13 @@ logoutButton?.addEventListener('click', async () => {
 closeModalBtn?.addEventListener('click', () => closeModal('loginModal'));
 closeAccountModal?.addEventListener('click', () => closeModal('accountModal'));
 
+/* Abrir painel Admin — SEM “carregando infinito” */
 goAdminBtn?.addEventListener('click', async () => {
+  await refreshAuth();                 // garante papel atualizado
   if (!isAdmin()) return alert('Acesso negado.');
-  adminPanel.style.display = 'block';
+  if (adminPanel) adminPanel.style.display = 'block';
   closeModal('accountModal');
-  await loadProfiles();
+  await loadProfiles();                // carrega perfis já com RLS correta
   window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
 });
 
