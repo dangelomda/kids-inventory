@@ -1,8 +1,9 @@
-// app.js — Inventário Kids (versão oficial unificada, COMPLETA e corrigida)
+// app.js — Inventário Kids (versão FINAL, HÍBRIDA E ROBUSTA)
 // - Auth (Google) + profiles (role/active) + badge
 // - Items com photo_key (sem lixo no storage)
-// - Realtime estável (load com debounce)
-// - Correções de freezing (finally em todas as operações)
+// - Realtime híbrido (Otimista com Rede de Segurança) para evitar travamentos
+// - Travas de segurança (isLoading) + “próxima execução” em ITENS e PERFIS
+// - Tokens de render (descarta resposta antiga de busca/reload)
 // - Export para Excel
 
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
@@ -18,7 +19,6 @@ const BUCKET = 'item-photos';
 
 /* ================================
    DOM
-   (se algum id não existir no seu HTML, o código ignora com null-check)
 =================================== */
 const itemForm  = document.getElementById('itemForm');
 const itemList  = document.getElementById('itemList');
@@ -61,7 +61,16 @@ let currentUser = null;
 let currentRole = 'visitor';
 let currentActive = false;
 let isSubmitting = false;
+
+let isLoadingItems = false;
+let nextLoadItemsRequested = false;
+let itemsRenderToken = 0;         // descarta respostas antigas de busca/reload
 let currentSearch = '';
+let realtimeSafetyNet = null;     // rede de segurança (itens)
+
+let isLoadingProfiles = false;
+let nextLoadProfilesRequested = false;
+let profilesRenderToken = 0;      // descarta respostas antigas do admin
 
 const isLoggedIn = () => !!currentUser;
 const canWrite   = () => currentActive && ['member','admin'].includes(currentRole);
@@ -176,39 +185,66 @@ function updateAuthUI() {
    ITENS (CRUD) — com photo_key
 =================================== */
 async function _loadItems(filter = "") {
-  let q = supabase.from('items').select('*').order('created_at', { ascending: false });
-  if (filter) q = q.ilike('name', `%${filter}%`);
-  const { data, error } = await q;
+  // lock + “próxima execução”
+  if (isLoadingItems) { nextLoadItemsRequested = true; return; }
+  isLoadingItems = true;
 
-  if (!itemList) return;
-  itemList.innerHTML = '';
-  if (error) { itemList.innerHTML = `<p>Erro ao carregar itens: ${error.message}</p>`; return; }
-  if (!data?.length) { itemList.innerHTML = '<p>Nenhum item encontrado.</p>'; return; }
+  // token: garante que só o último resultado vai renderizar
+  const token = ++itemsRenderToken;
 
-  data.forEach(item => {
-    const card = document.createElement('div');
-    card.className = 'item-card';
-    card.innerHTML = `
-      <img src="${item.photo_url || ''}" alt="${item.name}" ${item.photo_url ? '' : 'style="display:none"'} />
-      <h3>${item.name}</h3>
-      <p><b>Qtd:</b> ${item.quantity}</p>
-      <p><b>Local:</b> ${item.location}</p>
-      <div class="actions" style="${canWrite() ? '' : 'display:none'}">
-        <button class="edit-btn">✏️ Editar</button>
-        <button class="delete-btn">🗑️ Excluir</button>
-      </div>
-    `;
-    card.querySelector('img')?.addEventListener('click', () => { if (item.photo_url) window.open(item.photo_url, "_blank"); });
-    if (canWrite()) {
-      card.querySelector('.edit-btn')?.addEventListener('click', () => editItem(item));
-      card.querySelector('.delete-btn')?.addEventListener('click', () => deleteItem(item));
+  try {
+    let q = supabase.from('items').select('*').order('created_at', { ascending: false });
+    if (filter) q = q.ilike('name', `%${filter}%`);
+    const { data, error } = await q;
+
+    // resposta antiga? descarta render
+    if (token !== itemsRenderToken) return;
+
+    if (!itemList) return;
+    itemList.innerHTML = '';
+    if (error) { itemList.innerHTML = `<p>Erro ao carregar itens: ${error.message}</p>`; return; }
+    if (!data?.length) { itemList.innerHTML = '<p>Nenhum item encontrado.</p>'; return; }
+
+    data.forEach(item => {
+      const card = document.createElement('div');
+      card.className = 'item-card';
+      card.innerHTML = `
+        <img src="${item.photo_url || ''}" alt="${item.name}" ${item.photo_url ? '' : 'style="display:none"'} />
+        <h3>${item.name}</h3>
+        <p><b>Qtd:</b> ${item.quantity}</p>
+        <p><b>Local:</b> ${item.location}</p>
+        <div class="actions" style="${canWrite() ? '' : 'display:none'}">
+          <button class="edit-btn">✏️ Editar</button>
+          <button class="delete-btn">🗑️ Excluir</button>
+        </div>
+      `;
+      card.querySelector('img')?.addEventListener('click', () => { if (item.photo_url) window.open(item.photo_url, "_blank"); });
+      if (canWrite()) {
+        card.querySelector('.edit-btn')?.addEventListener('click', () => editItem(item));
+        card.querySelector('.delete-btn')?.addEventListener('click', () => deleteItem(item));
+      }
+      itemList.appendChild(card);
+    });
+  } finally {
+    isLoadingItems = false;
+    if (nextLoadItemsRequested) {
+      nextLoadItemsRequested = false;
+      _loadItems(currentSearch); // executa imediatamente com o filtro atual
     }
-    itemList.appendChild(card);
-  });
+  }
 }
 
-// Debounce firme para não competir com eventos realtime
+// Debounce firme para busca e realtime
 const loadItems = debounce((filter) => { currentSearch = filter || ''; _loadItems(currentSearch); }, 250);
+
+// Rede de segurança para operações de gravação (submissão/delete)
+function scheduleManualRefresh() {
+  clearTimeout(realtimeSafetyNet);
+  realtimeSafetyNet = setTimeout(() => {
+    console.warn("Realtime não respondeu a tempo. Acionando atualização manual de segurança.");
+    loadItems(currentSearch);
+  }, 2500);
+}
 
 itemForm?.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -226,7 +262,6 @@ itemForm?.addEventListener('submit', async (e) => {
   const currentPhotoKey = idInput?.dataset.currentPhotoKey || null;
   const fileRaw = getSelectedFile();
 
-  // feedback
   if (submitButton) {
     submitButton.disabled = true;
     submitButton.textContent = isEdit ? 'Salvando...' : 'Cadastrando...';
@@ -265,10 +300,11 @@ itemForm?.addEventListener('submit', async (e) => {
     alert(`Erro ao salvar: ${err.message || err}`);
   } finally {
     editingId = null;
+    const idInput = document.getElementById('itemId');
     if (idInput) { idInput.dataset.currentPhotoKey = ''; idInput.dataset.currentPhotoUrl = ''; }
     if (submitButton) { submitButton.disabled = false; submitButton.textContent = 'Cadastrar'; }
     isSubmitting = false;
-    loadItems(currentSearch); // debounced
+    scheduleManualRefresh(); // fallback caso o realtime não venha
   }
 });
 
@@ -296,7 +332,7 @@ async function deleteItem(item) {
     console.error("Erro ao deletar:", err);
     alert(`Não foi possível deletar: ${err.message || err}`);
   } finally {
-    loadItems(currentSearch);
+    scheduleManualRefresh();
   }
 }
 
@@ -314,14 +350,27 @@ exportButton?.addEventListener('click', async () => {
 /* ================================
    ADMIN (profiles) + Realtime
 =================================== */
-async function loadProfiles() {
-  if (!profilesBody) return;
+async function _loadProfiles() {
+  // lock + “próxima execução”
+  if (isLoadingProfiles) { nextLoadProfilesRequested = true; return; }
+  isLoadingProfiles = true;
+
+  const token = ++profilesRenderToken;
+
+  if (!profilesBody) {
+    isLoadingProfiles = false;
+    return;
+  }
   profilesBody.innerHTML = '<tr><td colspan="5">Carregando...</td></tr>';
+
   try {
     const { data, error } = await supabase
       .from('profiles')
       .select('email, role, active, created_at')
       .order('created_at', { ascending: false });
+
+    // resposta antiga? descarta render
+    if (token !== profilesRenderToken) return;
 
     if (error) { profilesBody.innerHTML = `<tr><td colspan="5">Erro: ${error.message}</td></tr>`; return; }
     if (!data?.length) { profilesBody.innerHTML = '<tr><td colspan="5">Nenhum perfil.</td></tr>'; return; }
@@ -350,7 +399,7 @@ async function loadProfiles() {
           alert(e.message || e);
         } finally {
           await refreshAuth();
-          await loadProfiles();
+          loadProfiles(); // usa wrapper debounced
         }
       });
 
@@ -362,7 +411,7 @@ async function loadProfiles() {
           alert(e.message || e);
         } finally {
           await refreshAuth();
-          await loadProfiles();
+          loadProfiles();
         }
       });
 
@@ -374,7 +423,7 @@ async function loadProfiles() {
           alert(e.message || e);
         } finally {
           await refreshAuth();
-          await loadProfiles();
+          loadProfiles();
         }
       });
 
@@ -387,7 +436,7 @@ async function loadProfiles() {
           alert(e.message || e);
         } finally {
           await refreshAuth();
-          await loadProfiles();
+          loadProfiles();
         }
       });
 
@@ -395,14 +444,23 @@ async function loadProfiles() {
     });
   } catch (e) {
     profilesBody.innerHTML = `<tr><td colspan="5">Erro inesperado.</td></tr>`;
+  } finally {
+    isLoadingProfiles = false;
+    if (nextLoadProfilesRequested) {
+      nextLoadProfilesRequested = false;
+      _loadProfiles(); // executa imediatamente o próximo
+    }
   }
 }
 
-/* Realtime: items e profiles (sempre usando loaders) */
+const loadProfiles = debounce(_loadProfiles, 250);
+
+/* Realtime: items e profiles */
 supabase
   .channel('items-realtime')
   .on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, () => {
-    loadItems(currentSearch);
+    clearTimeout(realtimeSafetyNet);   // cancela rede de segurança
+    loadItems(currentSearch);          // coalesce com debounce/lock/token
   })
   .subscribe();
 
@@ -410,7 +468,7 @@ const isPanelOpen = () => adminPanel && adminPanel.style.display !== 'none';
 supabase
   .channel('profiles-realtime')
   .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, async () => {
-    if (isPanelOpen() && isAdmin()) await loadProfiles();
+    if (isPanelOpen() && isAdmin()) loadProfiles(); // debounced
     await refreshAuth(); // atualiza badge/role imediatamente
   })
   .subscribe();
@@ -433,7 +491,7 @@ addUserBtn?.addEventListener('click', async () => {
   } finally {
     newUserEmail.value = '';
     await refreshAuth();
-    await loadProfiles();
+    loadProfiles();
   }
 });
 
@@ -485,18 +543,17 @@ closeAccountModal?.addEventListener('click', () => closeModal('accountModal'));
 
 /* Abrir painel Admin — SEM “carregando infinito” */
 goAdminBtn?.addEventListener('click', async () => {
-  await refreshAuth(); // garante papel atualizado
+  await refreshAuth();
   if (!isAdmin()) return alert('Acesso negado.');
 
-  closeModal('accountModal'); // fecha modal da conta primeiro
+  closeModal('accountModal');
   if (adminPanel) {
-    adminPanel.style.display = 'block'; // exibe painel imediatamente
-    await loadProfiles();               // carrega dados só depois que está visível
+    adminPanel.style.display = 'block';
+    loadProfiles(); // debounced; exibe primeiro, carrega depois
   }
 
   window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
 });
-
 
 /* ================================
    INICIALIZAÇÃO
