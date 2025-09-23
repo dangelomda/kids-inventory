@@ -1,4 +1,10 @@
-// app.js — Inventário Kids (com realtime em profiles, photo_key, login/logout robustos)
+// app.js — Inventário Kids (versão oficial unificada)
+// - Auth (Google) + profiles (role/active) + badge
+// - Items com photo_key (sem lixo no storage)
+// - Realtime estável (load com debounce)
+// - Correções de freezing (finally em todas as operações)
+// - Export para Excel
+
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
 
@@ -12,6 +18,7 @@ const BUCKET = 'item-photos';
 
 /* ================================
    DOM
+   (se algum id não existir no seu HTML, o código ignora com null-check)
 =================================== */
 const itemForm  = document.getElementById('itemForm');
 const itemList  = document.getElementById('itemList');
@@ -61,11 +68,21 @@ const canWrite   = () => currentActive && ['member','admin'].includes(currentRol
 const isAdmin    = () => currentActive && currentRole === 'admin';
 
 /* ================================
-   UTIL
+   HELPERS
 =================================== */
+const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
+const canon = (s) => (s||'').trim().toLowerCase();
+
+function debounce(fn, wait = 300) {
+  let t;
+  return (...args) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), wait);
+  };
+}
+
 const openModal  = (id) => document.getElementById(id)?.classList.add('show');
 const closeModal = (id) => document.getElementById(id)?.classList.remove('show');
-const canon = (s) => (s||'').trim().toLowerCase();
 
 function setBadge(email, role, active) {
   if (!userBadgeText || !userBadgeDot) return;
@@ -75,6 +92,9 @@ function setBadge(email, role, active) {
   userBadgeDot.className = `dot ${active ? r : 'visitor'}`;
 }
 
+/* ================================
+   IMAGEM
+=================================== */
 async function compressImage(file, maxWidth = 800, quality = 0.7) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -101,7 +121,7 @@ function getSelectedFile() {
 }
 
 /* ================================
-   STORAGE helpers (usa photo_key)
+   STORAGE (photo_key)
 =================================== */
 function makeKey() {
   const rnd = crypto?.randomUUID?.() || Math.random().toString(36).slice(2);
@@ -109,7 +129,8 @@ function makeKey() {
 }
 function publicUrlFromKey(key) {
   const { data } = supabase.storage.from(BUCKET).getPublicUrl(key);
-  return `${data.publicUrl}?v=${Date.now()}`; // cache-bust
+  // cache-bust
+  return `${data.publicUrl}?v=${Date.now()}`;
 }
 async function uploadPhotoAndGetRefs(file) {
   const key = makeKey();
@@ -149,6 +170,7 @@ async function refreshAuth() {
   }
   updateAuthUI();
 }
+
 function updateAuthUI() {
   if (visitorHint) visitorHint.style.display = canWrite() ? 'none' : 'block';
   if (goAdminBtn)  goAdminBtn.style.display  = isAdmin() ? 'block' : 'none';
@@ -156,13 +178,14 @@ function updateAuthUI() {
 }
 
 /* ================================
-   ITENS (CRUD) — com photo_key
+   ITEMS (CRUD) — com photo_key
 =================================== */
-async function loadItems(filter = "") {
+async function _loadItems(filter = "") {
   let q = supabase.from('items').select('*').order('created_at', { ascending: false });
   if (filter) q = q.ilike('name', `%${filter}%`);
   const { data, error } = await q;
 
+  if (!itemList) return;
   itemList.innerHTML = '';
   if (error) { itemList.innerHTML = `<p>Erro ao carregar itens: ${error.message}</p>`; return; }
   if (!data?.length) { itemList.innerHTML = '<p>Nenhum item encontrado.</p>'; return; }
@@ -189,6 +212,9 @@ async function loadItems(filter = "") {
   });
 }
 
+// Debounce firme para não competir com eventos realtime
+const loadItems = debounce((filter) => { currentSearch = filter || ''; _loadItems(currentSearch); }, 250);
+
 itemForm?.addEventListener('submit', async (e) => {
   e.preventDefault();
   if (!canWrite()) { openModal('loginModal'); return; }
@@ -205,8 +231,11 @@ itemForm?.addEventListener('submit', async (e) => {
   const currentPhotoKey = idInput?.dataset.currentPhotoKey || null;
   const fileRaw = getSelectedFile();
 
-  submitButton.disabled = true;
-  submitButton.textContent = isEdit ? 'Salvando...' : 'Cadastrando...';
+  // feedback
+  if (submitButton) {
+    submitButton.disabled = true;
+    submitButton.textContent = isEdit ? 'Salvando...' : 'Cadastrando...';
+  }
 
   try {
     let payload = { name, quantity, location };
@@ -219,20 +248,25 @@ itemForm?.addEventListener('submit', async (e) => {
     }
 
     if (isEdit) {
+      // Atualiza item
       const { error: updErr } = await supabase.from('items').update(payload).eq('id', editingId);
       if (updErr) {
+        // Desfaz upload novo se o update falhar
         if (payload.photo_key) await removeByKey(payload.photo_key);
         throw updErr;
       }
+      // Remove foto antiga do storage somente após update OK
       if (fileRaw && currentPhotoKey) await removeByKey(currentPhotoKey);
     } else {
       const { error: insErr } = await supabase.from('items').insert([payload]);
       if (insErr) {
+        // Desfaz upload se insert falhar
         if (payload.photo_key) await removeByKey(payload.photo_key);
         throw insErr;
       }
     }
 
+    // limpa form
     itemForm.reset();
     if (inputPhotoCamera) inputPhotoCamera.value = "";
     if (inputPhotoGallery) inputPhotoGallery.value = "";
@@ -242,10 +276,9 @@ itemForm?.addEventListener('submit', async (e) => {
   } finally {
     editingId = null;
     if (idInput) { idInput.dataset.currentPhotoKey = ''; idInput.dataset.currentPhotoUrl = ''; }
-    submitButton.disabled = false;
-    submitButton.textContent = 'Cadastrar';
+    if (submitButton) { submitButton.disabled = false; submitButton.textContent = 'Cadastrar'; }
     isSubmitting = false;
-    await loadItems(currentSearch);
+    loadItems(currentSearch); // debounced
   }
 });
 
@@ -258,7 +291,7 @@ function editItem(item) {
   document.getElementById('itemQuantity').value = item.quantity;
   document.getElementById('itemLocation').value = item.location;
   editingId = item.id;
-  submitButton.textContent = "Salvar Alterações";
+  if (submitButton) submitButton.textContent = "Salvar Alterações";
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -266,19 +299,22 @@ async function deleteItem(item) {
   if (!canWrite()) { openModal('loginModal'); return; }
   if (!confirm(`Excluir "${item.name}"?`)) return;
   try {
+    // 1) apaga no banco
     const { error: delErr } = await supabase.from('items').delete().eq('id', item.id);
     if (delErr) throw delErr;
+    // 2) depois apaga do storage (se existir)
     if (item.photo_key) await removeByKey(item.photo_key);
   } catch (err) {
     console.error("Erro ao deletar:", err);
     alert(`Não foi possível deletar: ${err.message || err}`);
   } finally {
-    await loadItems(currentSearch);
+    loadItems(currentSearch);
   }
 }
 
 /* Busca & Exportar */
-searchInput?.addEventListener('input', (e)=> { currentSearch = e.target.value.trim(); loadItems(currentSearch); });
+searchInput?.addEventListener('input', (e)=> loadItems(e.target.value.trim()));
+
 exportButton?.addEventListener('click', async () => {
   const { data, error } = await supabase.from('items').select('*').order('created_at', { ascending: false });
   if (error) return alert('Erro ao exportar.');
@@ -342,7 +378,7 @@ async function loadProfiles() {
   });
 }
 
-/* Realtime: items (já atualiza a lista) e profiles (admin + badge) */
+// Realtime (usar sempre o loader DEBOUNCED)
 supabase
   .channel('items-realtime')
   .on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, () => {
@@ -404,7 +440,7 @@ logoutButton?.addEventListener('click', async () => {
     if (adminPanel) adminPanel.style.display = 'none';
     closeModal('accountModal');
     await refreshAuth();
-    await loadItems();
+    loadItems();
   }
 });
 
@@ -427,10 +463,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   btnUseGallery?.addEventListener('click', () => inputPhotoGallery?.click());
 
   await refreshAuth();
-  await loadItems();
+  loadItems(); // debounced
 
   supabase.auth.onAuthStateChange(async () => {
     await refreshAuth();
-    await loadItems();
+    loadItems();
   });
 });
