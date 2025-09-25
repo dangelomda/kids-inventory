@@ -1,4 +1,8 @@
-// app.js — Versão Final com Correção de Auth por ID
+// app.js — Versão Final com Painel Admin corrigido para usar ID.
+// - CORREÇÃO FINAL 1: Imagem abre em modal.
+// - CORREÇÃO FINAL 2: Auth busca perfil por ID.
+// - CORREÇÃO FINAL 3: Ações do Painel Admin usam ID.
+
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
 
@@ -11,7 +15,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'item-photos';
 
 /* ================================
-   DOM... (todo o resto do seu código até a função refreshAuth)
+   DOM
 =================================== */
 const itemForm  = document.getElementById('itemForm');
 const itemList  = document.getElementById('itemList');
@@ -128,7 +132,6 @@ async function removeByKey(key) {
   await supabase.storage.from(BUCKET).remove([key]);
 }
 
-
 /* ================================
    AUTH
 =================================== */
@@ -138,16 +141,15 @@ async function refreshAuth() {
   currentRole = 'visitor';
   currentActive = false;
 
-  // CORREÇÃO: Buscar perfil pelo ID do usuário, não pelo email.
   if (currentUser) {
     const { data: prof, error } = await supabase
       .from('profiles')
       .select('role, active')
-      .eq('id', currentUser.id) // Usar o ID do usuário autenticado
+      .eq('id', currentUser.id)
       .maybeSingle();
 
     if (error) {
-      console.error("Erro ao buscar perfil (verifique suas Policies RLS e a sincronia dos IDs):", error.message);
+      console.error("Erro ao buscar perfil (verifique suas Policies RLS):", error.message);
     } else if (prof) {
       currentRole   = prof.role || 'visitor';
       currentActive = !!prof.active;
@@ -156,16 +158,15 @@ async function refreshAuth() {
   updateAuthUI();
 }
 
-/* ================================
-   ... todo o resto do seu código ...
-   (O restante do arquivo app.js continua igual ao que você já tem)
-=================================== */
 function updateAuthUI() {
   if (visitorHint) visitorHint.style.display = canWrite() ? 'none' : 'block';
   if (goAdminBtn)  goAdminBtn.style.display  = isAdmin() ? 'block' : 'none';
   setBadge(currentUser?.email || null, currentRole, currentActive);
 }
 
+/* ================================
+   ITENS (CRUD)
+=================================== */
 async function _loadItems(filter = "") {
   let q = supabase.from('items').select('*').order('created_at', { ascending: false });
   if (filter) q = q.ilike('name', `%${filter}%`);
@@ -281,10 +282,14 @@ async function deleteItem(item) {
   }
 }
 
+/* ================================
+   ADMIN (Perfis)
+=================================== */
 async function loadProfiles() {
   if (!profilesBody) return;
   profilesBody.innerHTML = '<tr><td colspan="5">Carregando...</td></tr>';
-  const { data, error } = await supabase.from('profiles').select('*').order('created_at', { ascending: false });
+  // CORREÇÃO FINAL 3: Selecionar o ID para usar nas ações
+  const { data, error } = await supabase.from('profiles').select('id, email, role, active, created_at').order('created_at', { ascending: false });
   if (error) { profilesBody.innerHTML = `<tr><td colspan="5">Erro: ${error.message}</td></tr>`; return; }
   if (!data || data.length === 0) { profilesBody.innerHTML = '<tr><td colspan="5">Nenhum perfil encontrado.</td></tr>'; return; }
 
@@ -292,28 +297,27 @@ async function loadProfiles() {
   data.forEach(p => {
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${p.email}</td><td><span class="role-badge ${p.role}">${p.role}</span></td><td>${p.active ? 'ATIVO' : 'INATIVO'}</td><td>${new Date(p.created_at).toLocaleString()}</td><td class="admin-row-actions"><button class="btn toggle">${p.active ? 'Desativar' : 'Ativar'}</button><button class="btn promote">Admin</button><button class="btn demote">Membro</button><button class="btn delete">Remover</button></td>`;
-    tr.querySelector('.toggle').addEventListener('click', async () => { await supabase.from('profiles').update({ active: !p.active }).eq('email', p.email); await refreshAuth(); await loadProfiles(); });
-    tr.querySelector('.promote').addEventListener('click', async () => { await supabase.from('profiles').update({ role: 'admin' }).eq('email', p.email); await refreshAuth(); await loadProfiles(); });
-    tr.querySelector('.demote').addEventListener('click', async () => { await supabase.from('profiles').update({ role: 'member' }).eq('email', p.email); await refreshAuth(); await loadProfiles(); });
-    tr.querySelector('.delete').addEventListener('click', async () => { if (confirm(`Remover ${p.email}?`)) { await supabase.from('profiles').delete().eq('email', p.email); await refreshAuth(); await loadProfiles(); }});
+    
+    // CORREÇÃO FINAL 3: Usar p.id em todas as ações
+    tr.querySelector('.toggle').addEventListener('click', async () => { await supabase.from('profiles').update({ active: !p.active }).eq('id', p.id); await refreshAuth(); await loadProfiles(); });
+    tr.querySelector('.promote').addEventListener('click', async () => { await supabase.from('profiles').update({ role: 'admin' }).eq('id', p.id); await refreshAuth(); await loadProfiles(); });
+    tr.querySelector('.demote').addEventListener('click', async () => { await supabase.from('profiles').update({ role: 'member' }).eq('id', p.id); await refreshAuth(); await loadProfiles(); });
+    tr.querySelector('.delete').addEventListener('click', async () => { if (confirm(`Remover ${p.email}?`)) { await supabase.from('profiles').delete().eq('id', p.id); await refreshAuth(); await loadProfiles(); }});
     profilesBody.appendChild(tr);
   });
 }
 
 addUserBtn?.addEventListener('click', async () => {
-  if (!isAdmin()) return alert('Apenas administradores.');
-  const email = canon(newUserEmail.value);
-  if (!email || !email.includes('@')) return alert('Informe um e-mail válido.');
-  try {
-    await supabase.from('profiles').upsert([{ email, role: 'member', active: true }], { onConflict: 'email' });
-  } catch (err) {
-    alert('Erro ao adicionar: ' + (err.message || err));
-  } finally {
-    newUserEmail.value = '';
-    await loadProfiles();
-  }
+  // CORREÇÃO FINAL 3: A funcionalidade de "Adicionar" muda. Agora ela não cria, pois o trigger faz isso.
+  // Poderia ser usada para convidar usuários, mas isso requer uma lógica mais complexa (RPC no Supabase).
+  // Por enquanto, a forma mais segura é instruir o admin.
+  alert("Para adicionar um novo usuário, peça para que ele faça o login no aplicativo uma vez. O perfil será criado automaticamente e você poderá gerenciá-lo aqui.");
+  newUserEmail.value = '';
 });
 
+/* ================================
+   EVENTOS GERAIS E INICIALIZAÇÃO
+=================================== */
 const handleAuthClick = () => {
   if (!isLoggedIn()) openModal('loginModal');
   else {
@@ -326,7 +330,17 @@ fabAdmin?.addEventListener('click', handleAuthClick);
 userBadge?.addEventListener('click', handleAuthClick);
 loginButton?.addEventListener('click', () => supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: window.location.origin } }));
 logoutButton?.addEventListener('click', async () => { await supabase.auth.signOut(); window.location.reload(); });
-goAdminBtn?.addEventListener('click', async () => { await refreshAuth(); if(isAdmin()) { closeModal('accountModal'); adminPanel.style.display = 'block'; await loadProfiles(); } else { alert('Acesso negado.'); } });
+goAdminBtn?.addEventListener('click', async () => { 
+  await refreshAuth(); 
+  if(isAdmin()) { 
+    closeModal('accountModal'); 
+    adminPanel.style.display = 'block'; 
+    await loadProfiles(); 
+    setTimeout(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }), 100);
+  } else { 
+    alert('Acesso negado.'); 
+  } 
+});
 closeModalBtn?.addEventListener('click', () => closeModal('loginModal'));
 closeAccountModal?.addEventListener('click', () => closeModal('accountModal'));
 btnUseCamera?.addEventListener('click', () => inputPhotoCamera?.click());
@@ -342,9 +356,11 @@ exportButton?.addEventListener('click', async () => {
   XLSX.writeFile(wb, 'inventario_kids.xlsx');
 });
 
+// REALTIME
 supabase.channel('items-realtime').on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, () => loadItems(currentSearch)).subscribe();
 supabase.channel('profiles-realtime').on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, async () => { await refreshAuth(); if (isPanelOpen()) await loadProfiles(); }).subscribe();
 
+// FUNÇÃO DE RETOMADA SEGURA
 const handleAppResume = async () => {
   console.log("🔄 App retomado, revalidando tudo...");
   await refreshAuth();
@@ -354,6 +370,7 @@ const handleAppResume = async () => {
   }
 };
 
+// PONTO DE ENTRADA E GATILHOS DE ROBUSTEZ
 document.addEventListener('DOMContentLoaded', async () => {
   await refreshAuth();
   _loadItems();
