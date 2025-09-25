@@ -16,7 +16,6 @@
     <img src="public/logo.svg" alt="Logo Inventário Kids" class="logo" />
     <h1>Inventário Kids</h1>
 
-    <!-- Badge oficial -->
     <button class="user-badge" id="userBadge" title="Conta">
       <span id="userBadgeText">VISITOR</span>
       <span class="dot visitor" id="userBadgeDot"></span>
@@ -24,7 +23,6 @@
   </header>
 
   <main>
-    <!-- Cadastro de Itens -->
     <section class="form-container">
       <h2>Cadastrar Novo Item</h2>
       <form id="itemForm">
@@ -41,49 +39,35 @@
           <label for="itemLocation">Local:</label>
           <input type="text" id="itemLocation" required />
         </div>
-
         <div class="input-group">
           <label>Foto:</label>
           <div class="photo-buttons">
             <input type="file" id="itemPhotoCamera" accept="image/*" capture="environment" style="display:none" />
             <button type="button" id="btnUseCamera">📷 Usar Câmera</button>
-
             <input type="file" id="itemPhotoGallery" accept="image/*" style="display:none" />
             <button type="button" id="btnUseGallery">🖼️ Escolher da Galeria</button>
           </div>
         </div>
-
         <button type="submit" id="submitButton">Cadastrar</button>
       </form>
       <p class="hint" id="visitorHint" style="display:none;">
-        Apenas leitura para visitantes. Entre como admin para cadastrar/editar/excluir.
+        Apenas leitura. Entre como admin ou membro para gerenciar itens.
       </p>
     </section>
 
-    <!-- Lista e Busca -->
     <section class="list-container">
       <h2>Materiais Cadastrados</h2>
       <div class="search-bar">
         <input type="text" id="searchInput" placeholder="🔍 Buscar item..." />
       </div>
       <div id="itemList" class="item-grid"></div>
-
       <div class="export-bar">
         <button id="exportButton">📤 Exportar para Excel</button>
       </div>
     </section>
 
-    <!-- Painel Admin -->
     <section id="adminPanel" class="admin-panel" style="display:none;">
       <h2>Painel Admin</h2>
-
-      <div class="admin-actions">
-        <div class="admin-add">
-          <input type="email" id="newUserEmail" placeholder="email@exemplo.com" />
-          <button id="addUserBtn">Adicionar como Membro</button>
-        </div>
-      </div>
-
       <div class="admin-list">
         <table class="admin-table">
           <thead>
@@ -91,7 +75,6 @@
               <th>Email</th>
               <th>Função</th>
               <th>Status</th>
-              <th>Criado em</th>
               <th>Ações</th>
             </tr>
           </thead>
@@ -101,10 +84,8 @@
     </section>
   </main>
 
-  <!-- Botão flutuante Admin/Login -->
   <button id="fabAdmin" class="fab">Admin</button>
 
-  <!-- Modal de Login -->
   <div id="loginModal" class="modal">
     <div class="modal-content">
       <h2>Entrar</h2>
@@ -114,7 +95,6 @@
     </div>
   </div>
 
-  <!-- Modal de Sessão/Admin -->
   <div id="accountModal" class="modal">
     <div class="modal-content">
       <h2 id="accountTitle">Conta</h2>

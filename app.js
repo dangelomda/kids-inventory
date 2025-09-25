@@ -1,7 +1,6 @@
-// app.js — Versão Final com Painel Admin corrigido para usar ID.
-// - CORREÇÃO FINAL 1: Imagem abre em modal.
-// - CORREÇÃO FINAL 2: Auth busca perfil por ID.
-// - CORREÇÃO FINAL 3: Ações do Painel Admin usam ID.
+// app.js — Inventário Kids (Versão Definitiva com Ajustes Finais de Robustez)
+// - CORREÇÃO 1: Ações do Painel Admin revalidam auth para funcionar de primeira e sempre.
+// - CORREÇÃO 2: Logout completo restaurado para permitir troca de contas Google.
 
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
@@ -42,8 +41,9 @@ const accountTitle      = document.getElementById('accountTitle');
 const accountSubtitle   = document.getElementById('accountSubtitle');
 const goAdminBtn        = document.getElementById('goAdminBtn');
 const profilesBody = document.getElementById('profilesBody');
-const addUserBtn   = document.getElementById('addUserBtn');
-const newUserEmail = document.getElementById('newUserEmail');
+// A funcionalidade de "Adicionar" foi removida da UI para clareza
+// const addUserBtn   = document.getElementById('addUserBtn');
+// const newUserEmail = document.getElementById('newUserEmail');
 
 /* ================================
    ESTADO
@@ -80,7 +80,7 @@ function setBadge(email, role, active) {
 }
 
 /* ================================
-   IMAGEM
+   IMAGEM E STORAGE
 =================================== */
 async function compressImage(file, maxWidth = 800, quality = 0.7) {
   return new Promise((resolve, reject) => {
@@ -110,30 +110,23 @@ function getSelectedFile() {
   return inputPhotoCamera?.files?.[0] || inputPhotoGallery?.files?.[0] || null;
 }
 
-/* ================================
-   STORAGE helpers
-=================================== */
 function makeKey() {
   const rnd = crypto?.randomUUID?.() || Math.random().toString(36).slice(2);
   return `${rnd}-${Date.now()}.jpg`;
 }
-function publicUrlFromKey(key) {
-  const { data } = supabase.storage.from(BUCKET).getPublicUrl(key);
-  return `${data.publicUrl}?v=${Date.now()}`;
-}
 async function uploadPhotoAndGetRefs(file) {
   const key = makeKey();
-  const { error: upErr } = await supabase.storage.from(BUCKET).upload(key, file);
-  if (upErr) throw upErr;
-  return { photo_key: key, photo_url: publicUrlFromKey(key) };
+  const { error } = await supabase.storage.from(BUCKET).upload(key, file);
+  if (error) throw error;
+  const { data } = supabase.storage.from(BUCKET).getPublicUrl(key);
+  return { photo_key: key, photo_url: `${data.publicUrl}?v=${Date.now()}` };
 }
 async function removeByKey(key) {
-  if (!key) return;
-  await supabase.storage.from(BUCKET).remove([key]);
+  if (key) await supabase.storage.from(BUCKET).remove([key]);
 }
 
 /* ================================
-   AUTH
+   AUTH E DADOS
 =================================== */
 async function refreshAuth() {
   const { data: { session } } = await supabase.auth.getSession();
@@ -142,15 +135,9 @@ async function refreshAuth() {
   currentActive = false;
 
   if (currentUser) {
-    const { data: prof, error } = await supabase
-      .from('profiles')
-      .select('role, active')
-      .eq('id', currentUser.id)
-      .maybeSingle();
-
-    if (error) {
-      console.error("Erro ao buscar perfil (verifique suas Policies RLS):", error.message);
-    } else if (prof) {
+    const { data: prof, error } = await supabase.from('profiles').select('role, active').eq('id', currentUser.id).maybeSingle();
+    if (error) console.error("Erro ao buscar perfil:", error.message);
+    else if (prof) {
       currentRole   = prof.role || 'visitor';
       currentActive = !!prof.active;
     }
@@ -161,12 +148,9 @@ async function refreshAuth() {
 function updateAuthUI() {
   if (visitorHint) visitorHint.style.display = canWrite() ? 'none' : 'block';
   if (goAdminBtn)  goAdminBtn.style.display  = isAdmin() ? 'block' : 'none';
-  setBadge(currentUser?.email || null, currentRole, currentActive);
+  setBadge(currentUser?.email, currentRole, currentActive);
 }
 
-/* ================================
-   ITENS (CRUD)
-=================================== */
 async function _loadItems(filter = "") {
   let q = supabase.from('items').select('*').order('created_at', { ascending: false });
   if (filter) q = q.ilike('name', `%${filter}%`);
@@ -177,6 +161,7 @@ async function _loadItems(filter = "") {
   if (error) { itemList.innerHTML = `<p>Erro: ${error.message}</p>`; return; }
   if (!data?.length) { itemList.innerHTML = '<p>Nenhum item encontrado.</p>'; return; }
 
+  const canUserWrite = canWrite();
   data.forEach(item => {
     const card = document.createElement('div');
     card.className = 'item-card';
@@ -185,7 +170,7 @@ async function _loadItems(filter = "") {
       <h3>${item.name}</h3>
       <p><b>Qtd:</b> ${item.quantity}</p>
       <p><b>Local:</b> ${item.location}</p>
-      <div class="actions" style="${canWrite() ? '' : 'display:none'}">
+      <div class="actions" style="${canUserWrite ? '' : 'display:none'}">
         <button class="edit-btn">✏️ Editar</button>
         <button class="delete-btn">🗑️ Excluir</button>
       </div>`;
@@ -195,15 +180,13 @@ async function _loadItems(filter = "") {
       if (item.photo_url) {
         const viewer = document.createElement('div');
         viewer.className = 'image-viewer-modal';
-        viewer.innerHTML = `
-            <img src="${item.photo_url}" alt="Visualização ampliada" />
-            <button class="close-btn">Fechar</button>`;
+        viewer.innerHTML = `<img src="${item.photo_url}" alt="Visualização ampliada" /><button class="close-btn">Fechar</button>`;
         viewer.onclick = () => viewer.remove();
         document.body.appendChild(viewer);
       }
     });
 
-    if (canWrite()) {
+    if (canUserWrite) {
       card.querySelector('.edit-btn')?.addEventListener('click', () => editItem(item));
       card.querySelector('.delete-btn')?.addEventListener('click', () => deleteItem(item));
     }
@@ -213,8 +196,12 @@ async function _loadItems(filter = "") {
 
 const loadItems = debounce(_loadItems, 300);
 
+/* ================================
+   AÇÕES (Formulários, Botões, etc.)
+=================================== */
 itemForm?.addEventListener('submit', async (e) => {
   e.preventDefault();
+  await refreshAuth();
   if (!canWrite()) { openModal('loginModal'); return; }
   if (isSubmitting) return;
   isSubmitting = true;
@@ -243,8 +230,6 @@ itemForm?.addEventListener('submit', async (e) => {
       await supabase.from('items').insert([payload]);
     }
     itemForm.reset();
-    if (inputPhotoCamera) inputPhotoCamera.value = "";
-    if (inputPhotoGallery) inputPhotoGallery.value = "";
   } catch (err) {
     alert(`Erro ao salvar: ${err.message}`);
   } finally {
@@ -257,10 +242,8 @@ itemForm?.addEventListener('submit', async (e) => {
 });
 
 function editItem(item) {
-  if (!canWrite()) { openModal('loginModal'); return; }
-  const idInput = document.getElementById('itemId');
-  idInput.value = item.id;
-  idInput.dataset.currentPhotoKey = item.photo_key || '';
+  document.getElementById('itemId').value = item.id;
+  document.getElementById('itemId').dataset.currentPhotoKey = item.photo_key || '';
   document.getElementById('itemName').value = item.name;
   document.getElementById('itemQuantity').value = item.quantity;
   document.getElementById('itemLocation').value = item.location;
@@ -270,8 +253,9 @@ function editItem(item) {
 }
 
 async function deleteItem(item) {
-  if (!canWrite()) { openModal('loginModal'); return; }
   if (!confirm(`Excluir "${item.name}"?`)) return;
+  await refreshAuth();
+  if (!canWrite()) { openModal('loginModal'); return; }
   try {
     await supabase.from('items').delete().eq('id', item.id);
     if (item.photo_key) await removeByKey(item.photo_key);
@@ -282,42 +266,36 @@ async function deleteItem(item) {
   }
 }
 
-/* ================================
-   ADMIN (Perfis)
-=================================== */
 async function loadProfiles() {
   if (!profilesBody) return;
-  profilesBody.innerHTML = '<tr><td colspan="5">Carregando...</td></tr>';
-  // CORREÇÃO FINAL 3: Selecionar o ID para usar nas ações
-  const { data, error } = await supabase.from('profiles').select('id, email, role, active, created_at').order('created_at', { ascending: false });
-  if (error) { profilesBody.innerHTML = `<tr><td colspan="5">Erro: ${error.message}</td></tr>`; return; }
-  if (!data || data.length === 0) { profilesBody.innerHTML = '<tr><td colspan="5">Nenhum perfil encontrado.</td></tr>'; return; }
-
+  profilesBody.innerHTML = '<tr><td colspan="4">Carregando...</td></tr>';
+  const { data, error } = await supabase.from('profiles').select('id, email, role, active').order('email');
+  if (error) { profilesBody.innerHTML = `<tr><td colspan="4">Erro: ${error.message}</td></tr>`; return; }
   profilesBody.innerHTML = '';
   data.forEach(p => {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${p.email}</td><td><span class="role-badge ${p.role}">${p.role}</span></td><td>${p.active ? 'ATIVO' : 'INATIVO'}</td><td>${new Date(p.created_at).toLocaleString()}</td><td class="admin-row-actions"><button class="btn toggle">${p.active ? 'Desativar' : 'Ativar'}</button><button class="btn promote">Admin</button><button class="btn demote">Membro</button><button class="btn delete">Remover</button></td>`;
+    tr.innerHTML = `<td>${p.email}</td><td><span class="role-badge ${p.role}">${p.role}</span></td><td>${p.active ? 'ATIVO' : 'INATIVO'}</td><td class="admin-row-actions"><button class="btn toggle">${p.active ? 'Desativar' : 'Ativar'}</button><button class="btn promote">Admin</button><button class="btn demote">Membro</button></td>`;
     
-    // CORREÇÃO FINAL 3: Usar p.id em todas as ações
-    tr.querySelector('.toggle').addEventListener('click', async () => { await supabase.from('profiles').update({ active: !p.active }).eq('id', p.id); await refreshAuth(); await loadProfiles(); });
-    tr.querySelector('.promote').addEventListener('click', async () => { await supabase.from('profiles').update({ role: 'admin' }).eq('id', p.id); await refreshAuth(); await loadProfiles(); });
-    tr.querySelector('.demote').addEventListener('click', async () => { await supabase.from('profiles').update({ role: 'member' }).eq('id', p.id); await refreshAuth(); await loadProfiles(); });
-    tr.querySelector('.delete').addEventListener('click', async () => { if (confirm(`Remover ${p.email}?`)) { await supabase.from('profiles').delete().eq('id', p.id); await refreshAuth(); await loadProfiles(); }});
+    const setupAdminAction = (selector, action) => {
+        tr.querySelector(selector)?.addEventListener('click', async () => {
+            await refreshAuth(); // CORREÇÃO 1: Revalida a permissão no momento do clique
+            if (isAdmin()) {
+                await action();
+                await loadProfiles(); // Recarrega o painel após a ação
+            } else {
+                alert('Acesso negado. Sua sessão pode ter expirado.');
+            }
+        });
+    };
+
+    setupAdminAction('.toggle', () => supabase.from('profiles').update({ active: !p.active }).eq('id', p.id));
+    setupAdminAction('.promote', () => supabase.from('profiles').update({ role: 'admin' }).eq('id', p.id));
+    setupAdminAction('.demote', () => supabase.from('profiles').update({ role: 'member' }).eq('id', p.id));
+    
     profilesBody.appendChild(tr);
   });
 }
 
-addUserBtn?.addEventListener('click', async () => {
-  // CORREÇÃO FINAL 3: A funcionalidade de "Adicionar" muda. Agora ela não cria, pois o trigger faz isso.
-  // Poderia ser usada para convidar usuários, mas isso requer uma lógica mais complexa (RPC no Supabase).
-  // Por enquanto, a forma mais segura é instruir o admin.
-  alert("Para adicionar um novo usuário, peça para que ele faça o login no aplicativo uma vez. O perfil será criado automaticamente e você poderá gerenciá-lo aqui.");
-  newUserEmail.value = '';
-});
-
-/* ================================
-   EVENTOS GERAIS E INICIALIZAÇÃO
-=================================== */
 const handleAuthClick = () => {
   if (!isLoggedIn()) openModal('loginModal');
   else {
@@ -329,7 +307,25 @@ const handleAuthClick = () => {
 fabAdmin?.addEventListener('click', handleAuthClick);
 userBadge?.addEventListener('click', handleAuthClick);
 loginButton?.addEventListener('click', () => supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: window.location.origin } }));
-logoutButton?.addEventListener('click', async () => { await supabase.auth.signOut(); window.location.reload(); });
+
+// CORREÇÃO 2: Logout completo restaurado para permitir troca de conta.
+logoutButton?.addEventListener('click', async () => {
+  try { await supabase.auth.signOut(); }
+  catch (e) { console.error('Erro no signOut:', e); }
+  finally {
+    editingId = null;
+    itemForm?.reset();
+    if (adminPanel) adminPanel.style.display = 'none';
+    closeModal('accountModal');
+    await refreshAuth();
+    await _loadItems();
+    // Força o logout da sessão Google para permitir troca de conta
+    setTimeout(() => {
+      window.location.href = "https://accounts.google.com/Logout";
+    }, 500);
+  }
+});
+
 goAdminBtn?.addEventListener('click', async () => { 
   await refreshAuth(); 
   if(isAdmin()) { 
@@ -341,6 +337,7 @@ goAdminBtn?.addEventListener('click', async () => {
     alert('Acesso negado.'); 
   } 
 });
+
 closeModalBtn?.addEventListener('click', () => closeModal('loginModal'));
 closeAccountModal?.addEventListener('click', () => closeModal('accountModal'));
 btnUseCamera?.addEventListener('click', () => inputPhotoCamera?.click());
@@ -356,11 +353,9 @@ exportButton?.addEventListener('click', async () => {
   XLSX.writeFile(wb, 'inventario_kids.xlsx');
 });
 
-// REALTIME
-supabase.channel('items-realtime').on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, () => loadItems(currentSearch)).subscribe();
-supabase.channel('profiles-realtime').on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, async () => { await refreshAuth(); if (isPanelOpen()) await loadProfiles(); }).subscribe();
-
-// FUNÇÃO DE RETOMADA SEGURA
+/* ================================
+   INICIALIZAÇÃO E GATILHOS
+=================================== */
 const handleAppResume = async () => {
   console.log("🔄 App retomado, revalidando tudo...");
   await refreshAuth();
@@ -370,20 +365,23 @@ const handleAppResume = async () => {
   }
 };
 
-// PONTO DE ENTRADA E GATILHOS DE ROBUSTEZ
 document.addEventListener('DOMContentLoaded', async () => {
   await refreshAuth();
   _loadItems();
+  
   supabase.auth.onAuthStateChange(async (event, session) => {
     console.log(`Auth event: ${event}`);
     await refreshAuth();
-    _loadItems(currentSearch);
+    await _loadItems(currentSearch);
   });
-});
 
-window.addEventListener('pageshow', handleAppResume);
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") {
-    handleAppResume();
-  }
+  supabase.channel('items-realtime').on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, () => loadItems(currentSearch)).subscribe();
+  supabase.channel('profiles-realtime').on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, async () => { await refreshAuth(); if (isPanelOpen()) await loadProfiles(); }).subscribe();
+
+  window.addEventListener('pageshow', handleAppResume);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      handleAppResume();
+    }
+  });
 });
