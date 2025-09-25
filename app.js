@@ -1,4 +1,4 @@
-// app.js — Versão Final com Recarregamento Forçado (Anti-Congelamento Garantido)
+// app.js — Versão Final com Keep-Alive (Anti-Congelamento Definitivo)
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
 
@@ -48,6 +48,8 @@ let currentRole = 'visitor';
 let currentActive = false;
 let isSubmitting = false;
 let currentSearch = '';
+let realtimeChannels = [];
+let isInitializing = true;
 
 const isLoggedIn = () => !!currentUser;
 const canWrite = () => currentActive && ['member', 'admin'].includes(currentRole);
@@ -57,6 +59,7 @@ const isPanelOpen = () => adminPanel && adminPanel.style.display !== 'none';
 /* ================================
    FUNÇÕES AUXILIARES
 =================================== */
+// ... (O resto das funções auxiliares, compressImage, storage, etc., permanecem as mesmas)
 const canon = (s) => (s || '').trim().toLowerCase();
 function debounce(fn, wait = 300) {
     let t;
@@ -101,9 +104,6 @@ function getSelectedFile() {
     return inputPhotoCamera?.files?.[0] || inputPhotoGallery?.files?.[0] || null;
 }
 
-/* ================================
-   OPERAÇÕES DE STORAGE (FOTOS)
-=================================== */
 function makeKey() {
     const rnd = crypto?.randomUUID?.() || Math.random().toString(36).slice(2);
     return `${rnd}-${Date.now()}.jpg`;
@@ -118,6 +118,7 @@ async function uploadPhotoAndGetRefs(file) {
 async function removeByKey(key) {
     if (key) await supabase.storage.from(BUCKET).remove([key]);
 }
+
 
 /* ================================
    LÓGICA PRINCIPAL DO APP
@@ -275,7 +276,7 @@ async function loadProfiles() {
             <td>${p.email}</td>
             <td class="role-cell"><span class="role-badge ${p.role}">${p.role}</span></td>
             <td class="status-cell">${p.active ? 'ATIVO' : 'INATIVO'}</td>
-            <td class.admin-row-actions">
+            <td class="admin-row-actions">
                 <button class="btn toggle" data-action="toggle">${p.active ? 'Desativar' : 'Ativar'}</button>
                 <button class="btn promote" data-action="promote">Admin</button>
                 <button class="btn demote" data-action="demote">Membro</button>
@@ -373,6 +374,7 @@ profilesBody?.addEventListener('click', async (e) => {
         try {
             const { error } = await query;
             if (error) throw error;
+            if (action === 'delete') return;
         } catch (error) {
             alert(`A ação falhou: ${error.message}`);
             revertUI();
@@ -421,34 +423,79 @@ exportButton?.addEventListener('click', async () => {
     XLSX.writeFile(wb, 'inventario_kids.xlsx');
 });
 
-/* ================================
-   INICIALIZAÇÃO E ROBUSTEZ FINAL
-=================================== */
+function initRealtime() {
+    realtimeChannels.forEach(ch => supabase.removeChannel(ch));
+    realtimeChannels = [];
+    console.log("▶️ Iniciando canais Realtime...");
+
+    const itemsChannel = supabase
+        .channel('items-realtime')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, () => loadItems(currentSearch))
+        .subscribe();
+
+    const profilesChannel = supabase
+        .channel('profiles-realtime')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, async () => {
+            if (isPanelOpen()) await loadProfiles();
+            await refreshAuth();
+        })
+        .subscribe();
+    
+    realtimeChannels.push(itemsChannel, profilesChannel);
+}
+
+const handleAppResume = async () => {
+    if (isInitializing) {
+        console.log("Ignorando 'resume' durante a inicialização inicial.");
+        return;
+    }
+    console.log("🔄 App retomado, revalidando sessão e canais...");
+    await refreshAuth();
+    await _loadItems(currentSearch);
+    if (isPanelOpen() && isAdmin()) {
+        await loadProfiles();
+    }
+    initRealtime();
+};
+
 document.addEventListener('DOMContentLoaded', async () => {
+    isInitializing = true;
+    console.log("🚀 DOM Carregado, iniciando aplicação...");
+    
     await refreshAuth();
     await _loadItems();
+    initRealtime();
     
     supabase.auth.onAuthStateChange(async (event, session) => {
         await refreshAuth();
         await _loadItems(currentSearch);
     });
 
-    supabase.channel('items-realtime').on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, () => loadItems(currentSearch)).subscribe();
-    supabase.channel('profiles-realtime').on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, async () => { await refreshAuth(); if (isPanelOpen()) await loadProfiles(); }).subscribe();
-
-    // LÓGICA DE RECARREGAMENTO FORÇADO ANTI-CONGELAMENTO
-    let lastVisibilityTime = document.timeline.currentTime;
-    
+    window.addEventListener('pageshow', handleAppResume);
     document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === 'hidden') {
-            lastVisibilityTime = document.timeline.currentTime;
-        } else if (document.visibilityState === 'visible') {
-            const timeInBackground = document.timeline.currentTime - lastVisibilityTime;
-            // Se a aba ficou inativa por mais de 20 segundos, recarrega para garantir a conexão.
-            if (timeInBackground > 20000) { 
-                console.warn(`Aba inativa por ${Math.round(timeInBackground / 1000)}s. Recarregando para garantir a conexão.`);
-                window.location.reload(true); // O 'true' força a recarga do servidor
-            }
+        if (document.visibilityState === "visible") {
+            handleAppResume();
         }
     });
+
+    // --- Keep-Alive Hack ---
+    // Toca um áudio silencioso para tentar manter a aba ativa.
+    const keepAliveAudio = document.createElement('audio');
+    // Áudio MP3 silencioso de 1s em Base64. Não requer arquivo externo.
+    keepAliveAudio.src = "data:audio/mpeg;base64,SUQzBAAAAAABEVRYWFgAAAAtAAADY29tbWVudABCaWdTb3VuZEJhbmsuY29tIC8gTGFTb25vdGhlcXVlLm9yZwBURU5DAAAAHQAAA1N3aXRjaCBQbHVzIMKpIE5DSCBTb2Z0d2FyZQBUSVQyAAAABgAAAzIyMzUAVFNTRQAAAA8AAANMYXZmNTcuODMuMTAwAAAAAAAAAAAAAAD/80DEAAAAA0gAAAAATEFNRTMuMTAwVVVVVVVVVVVVVUxBTUUzLjEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVf/zQsRbAAADSAAAAABVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV";
+    keepAliveAudio.loop = true;
+    keepAliveAudio.volume = 0; // Garante que é inaudível
+
+    // Tenta tocar o áudio. Navegadores modernos podem bloquear isso até uma interação do usuário.
+    let playPromise = keepAliveAudio.play();
+    if (playPromise !== undefined) {
+        playPromise.catch(error => {
+            console.warn("Autoplay do áudio bloqueado. Tentando tocar após o primeiro clique.");
+            // Adiciona um listener para o primeiro clique em qualquer lugar para iniciar o áudio.
+            document.body.addEventListener('click', () => keepAliveAudio.play(), { once: true });
+        });
+    }
+
+    console.log("✅ Aplicação pronta. Semáforo aberto.");
+    isInitializing = false;
 });
