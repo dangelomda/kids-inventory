@@ -1,4 +1,4 @@
-// app.js — Versão Final com Reinicialização de Canais Realtime (Anti-Congelamento Definitivo)
+// app.js — Versão Final com Controle de Inicialização (Anti-Congelamento Definitivo)
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
 
@@ -49,7 +49,8 @@ let currentRole = 'visitor';
 let currentActive = false;
 let isSubmitting = false;
 let currentSearch = '';
-let realtimeChannels = []; // Armazena os canais realtime ativos
+let realtimeChannels = [];
+let isInitializing = true; // NOSSO "SEMÁFORO"
 
 const isLoggedIn = () => !!currentUser;
 const canWrite = () => currentActive && ['member', 'admin'].includes(currentRole);
@@ -421,9 +422,7 @@ exportButton?.addEventListener('click', async () => {
     XLSX.writeFile(wb, 'inventario_kids.xlsx');
 });
 
-// NOVA ARQUITETURA ANTI-CONGELAMENTO
 function initRealtime() {
-    // Remove canais antigos para evitar duplicatas e conexões mortas
     realtimeChannels.forEach(ch => supabase.removeChannel(ch));
     realtimeChannels = [];
     console.log("▶️ Iniciando canais Realtime...");
@@ -436,8 +435,8 @@ function initRealtime() {
     const profilesChannel = supabase
         .channel('profiles-realtime')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, async () => {
-            await refreshAuth();
             if (isPanelOpen()) await loadProfiles();
+            await refreshAuth();
         })
         .subscribe();
     
@@ -445,56 +444,27 @@ function initRealtime() {
 }
 
 const handleAppResume = async () => {
-    console.log("🔄 App retomado, revalidando sessão e canais...");
-    await refreshAuth();
-    if (!currentUser) {
-        openModal('loginModal'); // Só abre se o login realmente foi perdido
+    // Usa o "semáforo" para não rodar durante a inicialização
+    if (isInitializing) {
+        console.log("Ignorando 'resume' durante a inicialização inicial.");
         return;
     }
+    console.log("🔄 App retomado, revalidando sessão e canais...");
+    await refreshAuth();
     await _loadItems(currentSearch);
     if (isPanelOpen() && isAdmin()) {
         await loadProfiles();
     }
-    initRealtime(); // Garante que os canais Realtime "acordem" junto com a aba
+    initRealtime();
 };
-/* ================================
-   DEBUG DE CONEXÃO SUPABASE
-=================================== */
-supabase.auth.onAuthStateChange((event, session) => {
-  console.log(`EVENTO DE AUTH: ${event}`, session);
-});
 
-const channel = supabase.channel('check-connection');
-channel
-  .on('postgres_changes', { event: '*', schema: 'public' }, payload => {
-    console.log('Recebeu mudança no Realtime:', payload);
-  })
-  .on('presence', { event: 'sync' }, () => {
-    console.log('Presença sincronizada:', channel.presenceState());
-  })
-  .subscribe(status => {
-    if (status === 'SUBSCRIBED') {
-      console.log('✅ CONECTADO AO REALTIME!');
-    }
-    if (status === 'CHANNEL_ERROR') {
-      console.error('❌ ERRO DE CANAL REALTIME!');
-    }
-    if (status === 'TIMED_OUT') {
-      console.error('⌛️ TIMEOUT NA CONEXÃO REALTIME!');
-    }
-    if (status === 'CLOSED') {
-      console.warn('🔌 CANAL REALTIME FECHADO!');
-    }
-  });
-
-setInterval(() => {
-    const status = channel.state;
-    console.log(`STATUS ATUAL DO CANAL REALTIME: ${status}`);
-}, 5000); // A cada 5 segundos, informa o status da conexão
 document.addEventListener('DOMContentLoaded', async () => {
+    isInitializing = true; // Semáforo fechado
+    console.log("🚀 DOM Carregado, iniciando aplicação...");
+    
     await refreshAuth();
     await _loadItems();
-    initRealtime(); // Inicia o Realtime no primeiro carregamento
+    initRealtime();
     
     supabase.auth.onAuthStateChange(async (event, session) => {
         await refreshAuth();
@@ -507,4 +477,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             handleAppResume();
         }
     });
+
+    console.log("✅ Aplicação pronta. Abrindo semáforo.");
+    isInitializing = false; // Semáforo aberto
 });
