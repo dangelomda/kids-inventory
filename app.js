@@ -2,7 +2,7 @@
 // - Auth (Google) + profiles (role/active) + badge
 // - Items com photo_key (sem lixo no storage)
 // - Realtime estável (load com debounce)
-// - Correções de freezing (finally, noopener, e revalidação de sessão)
+// - Correções de freezing (finally, noopener, e revalidação de sessão ASYNC)
 // - Export para Excel
 // - Prevenção de vazamento de memória em imagens
 // - Correção visual do botão Excluir
@@ -512,16 +512,20 @@ document.addEventListener('DOMContentLoaded', async () => {
 /* ================================
    ROBUSTEZ EXTRA: background/retorno
 =================================== */
+// Função ASYNC para garantir que a autenticação termine ANTES de recarregar.
 const handleAppResume = async () => {
   console.log("🔄 App retomado, revalidando sessão e recarregando dados...");
+  // 1. ESPERA a sessão ser revalidada. Essencial para não perder o login.
   await refreshAuth();
   
+  // 2. Só então, recarrega os dados com a permissão correta.
   loadItems(currentSearch);
   if (isPanelOpen() && isAdmin()) {
     await loadProfiles();
   }
 };
 
+// Gatilhos que chamam a função de retomada segura.
 window.addEventListener('pageshow', handleAppResume);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
