@@ -1,4 +1,4 @@
-// app.js — Versão Final com Safety Net de Heartbeat Refinado
+// app.js — Versão Final com Recarregamento Forçado (Anti-Congelamento Garantido)
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
 
@@ -48,8 +48,6 @@ let currentRole = 'visitor';
 let currentActive = false;
 let isSubmitting = false;
 let currentSearch = '';
-let realtimeChannels = [];
-let isInitializing = true;
 
 const isLoggedIn = () => !!currentUser;
 const canWrite = () => currentActive && ['member', 'admin'].includes(currentRole);
@@ -277,7 +275,7 @@ async function loadProfiles() {
             <td>${p.email}</td>
             <td class="role-cell"><span class="role-badge ${p.role}">${p.role}</span></td>
             <td class="status-cell">${p.active ? 'ATIVO' : 'INATIVO'}</td>
-            <td class="admin-row-actions">
+            <td class.admin-row-actions">
                 <button class="btn toggle" data-action="toggle">${p.active ? 'Desativar' : 'Ativar'}</button>
                 <button class="btn promote" data-action="promote">Admin</button>
                 <button class="btn demote" data-action="demote">Membro</button>
@@ -393,7 +391,10 @@ const handleAuthClick = () => {
 fabAdmin?.addEventListener('click', handleAuthClick);
 userBadge?.addEventListener('click', handleAuthClick);
 loginButton?.addEventListener('click', () => supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: window.location.origin } }));
-logoutButton?.addEventListener('click', async () => { window.location.reload(); });
+logoutButton?.addEventListener('click', async () => {
+    try { await supabase.auth.signOut(); }
+    finally { window.location.reload(); }
+});
 goAdminBtn?.addEventListener('click', async () => { 
     await refreshAuth(); 
     if(isAdmin()) { 
@@ -420,72 +421,34 @@ exportButton?.addEventListener('click', async () => {
     XLSX.writeFile(wb, 'inventario_kids.xlsx');
 });
 
-function initRealtime() {
-    realtimeChannels.forEach(ch => supabase.removeChannel(ch));
-    realtimeChannels = [];
-    console.log("▶️ Iniciando canais Realtime...");
-
-    const itemsChannel = supabase
-        .channel('items-realtime')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, () => loadItems(currentSearch))
-        .subscribe();
-
-    const profilesChannel = supabase
-        .channel('profiles-realtime')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, async () => {
-            if (isPanelOpen()) await loadProfiles();
-            await refreshAuth();
-        })
-        .subscribe();
-    
-    realtimeChannels.push(itemsChannel, profilesChannel);
-}
-
-const handleAppResume = async () => {
-    if (isInitializing) {
-        console.log("Ignorando 'resume' durante a inicialização inicial.");
-        return;
-    }
-    console.log("🔄 App retomado, revalidando sessão e canais...");
-    await refreshAuth();
-    await _loadItems(currentSearch);
-    if (isPanelOpen() && isAdmin()) {
-        await loadProfiles();
-    }
-    initRealtime();
-};
-
+/* ================================
+   INICIALIZAÇÃO E ROBUSTEZ FINAL
+=================================== */
 document.addEventListener('DOMContentLoaded', async () => {
-    isInitializing = true;
-    console.log("🚀 DOM Carregado, iniciando aplicação...");
-    
     await refreshAuth();
     await _loadItems();
-    initRealtime();
     
     supabase.auth.onAuthStateChange(async (event, session) => {
         await refreshAuth();
         await _loadItems(currentSearch);
     });
 
-    window.addEventListener('pageshow', handleAppResume);
+    supabase.channel('items-realtime').on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, () => loadItems(currentSearch)).subscribe();
+    supabase.channel('profiles-realtime').on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, async () => { await refreshAuth(); if (isPanelOpen()) await loadProfiles(); }).subscribe();
+
+    // LÓGICA DE RECARREGAMENTO FORÇADO ANTI-CONGELAMENTO
+    let lastVisibilityTime = document.timeline.currentTime;
+    
     document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "visible") {
-            handleAppResume();
+        if (document.visibilityState === 'hidden') {
+            lastVisibilityTime = document.timeline.currentTime;
+        } else if (document.visibilityState === 'visible') {
+            const timeInBackground = document.timeline.currentTime - lastVisibilityTime;
+            // Se a aba ficou inativa por mais de 20 segundos, recarrega para garantir a conexão.
+            if (timeInBackground > 20000) { 
+                console.warn(`Aba inativa por ${Math.round(timeInBackground / 1000)}s. Recarregando para garantir a conexão.`);
+                window.location.reload(true); // O 'true' força a recarga do servidor
+            }
         }
     });
-
-    // REDE DE SEGURANÇA 'HEARTBEAT' REFINADA
-    const noop = () => {}; // Função vazia para cumprir a API
-    supabase.channel('heartbeat')
-      .on('postgres_changes', { event: '*', schema: 'public' }, noop)
-      .subscribe((status, err) => {
-        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-          console.warn(`⚠️ Conexão Realtime instável (Status: ${status}). Recarregando a página para restaurar...`);
-          window.location.reload();
-        }
-      });
-
-    console.log("✅ Aplicação pronta. Semáforo aberto.");
-    isInitializing = false;
 });
