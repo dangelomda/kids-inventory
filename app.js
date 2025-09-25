@@ -1,6 +1,4 @@
-// app.js — Inventário Kids (Versão Final Consolidada e Robusta)
-// Combina a lógica de revalidação agressiva com as melhorias de UX (modal) e segurança (auth por ID).
-
+// app.js — Versão Final com Revalidação Atômica (Anti-Congelamento Definitivo)
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
 
@@ -194,11 +192,8 @@ const loadItems = debounce(_loadItems, 300);
 
 itemForm?.addEventListener('submit', async (e) => {
     e.preventDefault();
-    await refreshAuth(); // ANTI-CONGELAMENTO: Revalida a sessão antes da ação
-    if (!canWrite()) {
-        openModal('loginModal');
-        return;
-    }
+    await refreshAuth();
+    if (!canWrite()) { openModal('loginModal'); return; }
     if (isSubmitting) return;
     isSubmitting = true;
     submitButton.disabled = true;
@@ -226,8 +221,6 @@ itemForm?.addEventListener('submit', async (e) => {
             await supabase.from('items').insert([payload]);
         }
         itemForm.reset();
-        if (inputPhotoCamera) inputPhotoCamera.value = "";
-        if (inputPhotoGallery) inputPhotoGallery.value = "";
     } catch (err) {
         alert(`Erro ao salvar: ${err.message}`);
     } finally {
@@ -252,11 +245,8 @@ function editItem(item) {
 
 async function deleteItem(item) {
     if (!confirm(`Excluir "${item.name}"?`)) return;
-    await refreshAuth(); // ANTI-CONGELAMENTO: Revalida a sessão antes da ação
-    if (!canWrite()) {
-        openModal('loginModal');
-        return;
-    }
+    await refreshAuth();
+    if (!canWrite()) { openModal('loginModal'); return; }
     try {
         await supabase.from('items').delete().eq('id', item.id);
         if (item.photo_key) await removeByKey(item.photo_key);
@@ -270,48 +260,74 @@ async function deleteItem(item) {
 async function loadProfiles() {
     if (!profilesBody) return;
     profilesBody.innerHTML = '<tr><td colspan="4">Carregando...</td></tr>';
-    const { data, error } = await supabase.from('profiles').select('id, email, role, active, created_at').order('email');
+    const { data, error } = await supabase.from('profiles').select('id, email, role, active').order('email');
     if (error) { profilesBody.innerHTML = `<tr><td colspan="4">Erro: ${error.message}</td></tr>`; return; }
     profilesBody.innerHTML = '';
     data.forEach(p => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${p.email}</td><td><span class="role-badge ${p.role}">${p.role}</span></td><td>${p.active ? 'ATIVO' : 'INATIVO'}</td><td class="admin-row-actions"><button class="btn toggle">${p.active ? 'Desativar' : 'Ativar'}</button><button class="btn promote">Admin</button><button class="btn demote">Membro</button><button class="btn delete">Remover</button></td>`;
-        
-        const setupAdminAction = (selector, action) => {
-            tr.querySelector(selector)?.addEventListener('click', async () => {
-                await refreshAuth(); // ANTI-CONGELAMENTO: Revalida a permissão no momento do clique
-                if (isAdmin()) {
-                    await action();
-                    await loadProfiles();
-                } else {
-                    alert('Acesso negado. Sua sessão pode ter expirado.');
-                }
-            });
-        };
-
-        setupAdminAction('.toggle', () => supabase.from('profiles').update({ active: !p.active }).eq('id', p.id));
-        setupAdminAction('.promote', () => supabase.from('profiles').update({ role: 'admin' }).eq('id', p.id));
-        setupAdminAction('.demote', () => supabase.from('profiles').update({ role: 'member' }).eq('id', p.id));
-        
-        tr.querySelector('.delete')?.addEventListener('click', async () => {
-            await refreshAuth(); // ANTI-CONGELAMENTO: Revalida também na exclusão
-            if (isAdmin()) {
-                if (p.id === currentUser.id) {
-                    alert("Você не pode remover a si mesmo.");
-                    return;
-                }
-                if (confirm(`Remover o usuário ${p.email}?`)) {
-                    await supabase.from('profiles').delete().eq('id', p.id);
-                    await loadProfiles();
-                }
-            } else {
-                alert('Acesso negado.');
-            }
-        });
-        
+        tr.dataset.id = p.id;
+        tr.dataset.email = p.email;
+        tr.dataset.active = p.active;
+        tr.innerHTML = `
+            <td>${p.email}</td>
+            <td><span class="role-badge ${p.role}">${p.role}</span></td>
+            <td>${p.active ? 'ATIVO' : 'INATIVO'}</td>
+            <td class="admin-row-actions">
+                <button class="btn toggle" data-action="toggle">${p.active ? 'Desativar' : 'Ativar'}</button>
+                <button class="btn promote" data-action="promote">Admin</button>
+                <button class="btn demote" data-action="demote">Membro</button>
+                <button class="btn delete" data-action="delete">Remover</button>
+            </td>`;
         profilesBody.appendChild(tr);
     });
 }
+
+profilesBody?.addEventListener('click', async (e) => {
+    const button = e.target.closest('button[data-action]');
+    if (!button) return;
+
+    await refreshAuth();
+    if (!isAdmin()) {
+        alert('Acesso negado. Sua sessão pode ter expirado.');
+        return;
+    }
+
+    const tr = button.closest('tr');
+    const id = tr.dataset.id;
+    const email = tr.dataset.email;
+    const currentlyActive = tr.dataset.active === 'true';
+    const action = button.dataset.action;
+
+    let query;
+    let confirmation = true;
+
+    switch (action) {
+        case 'toggle':
+            query = supabase.from('profiles').update({ active: !currentlyActive }).eq('id', id);
+            break;
+        case 'promote':
+            query = supabase.from('profiles').update({ role: 'admin' }).eq('id', id);
+            break;
+        case 'demote':
+            query = supabase.from('profiles').update({ role: 'member' }).eq('id', id);
+            break;
+        case 'delete':
+            if (id === currentUser.id) {
+                alert("Você não pode remover a si mesmo.");
+                return;
+            }
+            confirmation = confirm(`Tem certeza que deseja remover o usuário ${email}?`);
+            if (confirmation) query = supabase.from('profiles').delete().eq('id', id);
+            break;
+        default: return;
+    }
+
+    if (query && confirmation) {
+        const { error } = await query;
+        if (error) alert(`Erro: ${error.message}`);
+        await loadProfiles();
+    }
+});
 
 const handleAuthClick = () => {
     if (!isLoggedIn()) openModal('loginModal');
@@ -324,27 +340,7 @@ const handleAuthClick = () => {
 fabAdmin?.addEventListener('click', handleAuthClick);
 userBadge?.addEventListener('click', handleAuthClick);
 loginButton?.addEventListener('click', () => supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: window.location.origin } }));
-
-// LOGOUT COMPLETO: Restaura a funcionalidade de troca de conta
-logoutButton?.addEventListener('click', async () => {
-    try {
-        await supabase.auth.signOut();
-    } catch (e) {
-        console.error('Erro no signOut:', e);
-    } finally {
-        editingId = null;
-        itemForm?.reset();
-        if (adminPanel) adminPanel.style.display = 'none';
-        closeModal('accountModal');
-        await refreshAuth();
-        await _loadItems();
-        // Força o logout da sessão Google para permitir troca de conta
-        setTimeout(() => {
-            window.location.href = "https://accounts.google.com/Logout";
-        }, 500);
-    }
-});
-
+logoutButton?.addEventListener('click', async () => { window.location.reload(); });
 goAdminBtn?.addEventListener('click', async () => { 
     await refreshAuth(); 
     if(isAdmin()) { 
@@ -356,7 +352,6 @@ goAdminBtn?.addEventListener('click', async () => {
         alert('Acesso negado.'); 
     } 
 });
-
 closeModalBtn?.addEventListener('click', () => closeModal('loginModal'));
 closeAccountModal?.addEventListener('click', () => closeModal('accountModal'));
 btnUseCamera?.addEventListener('click', () => inputPhotoCamera?.click());
@@ -372,12 +367,13 @@ exportButton?.addEventListener('click', async () => {
     XLSX.writeFile(wb, 'inventario_kids.xlsx');
 });
 
+// A função que "acorda" o aplicativo de forma atômica e segura
 const handleAppResume = async () => {
     console.log("🔄 App retomado, revalidando tudo...");
     await refreshAuth();
-    _loadItems(currentSearch);
+    await _loadItems(currentSearch); // <-- Correção: Adicionado 'await'
     if (isPanelOpen() && isAdmin()) {
-        loadProfiles();
+        await loadProfiles(); // <-- Correção: Adicionado 'await'
     }
 };
 
