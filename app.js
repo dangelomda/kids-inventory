@@ -1,7 +1,4 @@
-// app.js — Inventário Kids (Versão Definitiva e Consolidada)
-// - CORREÇÃO FINAL 1: Imagem abre em modal para evitar travamentos no celular.
-// - CORREÇÃO FINAL 2: Auth busca perfil por ID para alinhar com as Policies (RLS) do Supabase.
-
+// app.js — Versão Final com Correção de Auth por ID
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
 
@@ -14,7 +11,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'item-photos';
 
 /* ================================
-   DOM
+   DOM... (todo o resto do seu código até a função refreshAuth)
 =================================== */
 const itemForm  = document.getElementById('itemForm');
 const itemList  = document.getElementById('itemList');
@@ -131,6 +128,7 @@ async function removeByKey(key) {
   await supabase.storage.from(BUCKET).remove([key]);
 }
 
+
 /* ================================
    AUTH
 =================================== */
@@ -140,8 +138,7 @@ async function refreshAuth() {
   currentRole = 'visitor';
   currentActive = false;
 
-  // CORREÇÃO DEFINITIVA 2: Buscar perfil pelo ID do usuário, não pelo email.
-  // Isso garante que as Policies (RLS) do Supabase funcionem corretamente.
+  // CORREÇÃO: Buscar perfil pelo ID do usuário, não pelo email.
   if (currentUser) {
     const { data: prof, error } = await supabase
       .from('profiles')
@@ -150,7 +147,7 @@ async function refreshAuth() {
       .maybeSingle();
 
     if (error) {
-      console.error("Erro ao buscar perfil (verifique suas Policies RLS):", error.message);
+      console.error("Erro ao buscar perfil (verifique suas Policies RLS e a sincronia dos IDs):", error.message);
     } else if (prof) {
       currentRole   = prof.role || 'visitor';
       currentActive = !!prof.active;
@@ -159,15 +156,16 @@ async function refreshAuth() {
   updateAuthUI();
 }
 
+/* ================================
+   ... todo o resto do seu código ...
+   (O restante do arquivo app.js continua igual ao que você já tem)
+=================================== */
 function updateAuthUI() {
   if (visitorHint) visitorHint.style.display = canWrite() ? 'none' : 'block';
   if (goAdminBtn)  goAdminBtn.style.display  = isAdmin() ? 'block' : 'none';
   setBadge(currentUser?.email || null, currentRole, currentActive);
 }
 
-/* ================================
-   ITENS (CRUD)
-=================================== */
 async function _loadItems(filter = "") {
   let q = supabase.from('items').select('*').order('created_at', { ascending: false });
   if (filter) q = q.ilike('name', `%${filter}%`);
@@ -191,7 +189,6 @@ async function _loadItems(filter = "") {
         <button class="delete-btn">🗑️ Excluir</button>
       </div>`;
     
-    // CORREÇÃO DEFINITIVA 1: Imagem abre em modal para evitar travamentos no celular.
     card.querySelector('img')?.addEventListener('click', (e) => {
       e.preventDefault();
       if (item.photo_url) {
@@ -200,7 +197,7 @@ async function _loadItems(filter = "") {
         viewer.innerHTML = `
             <img src="${item.photo_url}" alt="Visualização ampliada" />
             <button class="close-btn">Fechar</button>`;
-        viewer.onclick = () => viewer.remove(); // Clicar fora ou no botão fecha
+        viewer.onclick = () => viewer.remove();
         document.body.appendChild(viewer);
       }
     });
@@ -254,7 +251,7 @@ itemForm?.addEventListener('submit', async (e) => {
     submitButton.disabled = false;
     submitButton.textContent = 'Cadastrar';
     isSubmitting = false;
-    await _loadItems(currentSearch); // Carrega imediatamente após salvar
+    await _loadItems(currentSearch);
   }
 });
 
@@ -280,13 +277,10 @@ async function deleteItem(item) {
   } catch (err) {
     alert(`Não foi possível deletar: ${err.message}`);
   } finally {
-    await _loadItems(currentSearch); // Carrega imediatamente após deletar
+    await _loadItems(currentSearch);
   }
 }
 
-/* ================================
-   ADMIN (Perfis)
-=================================== */
 async function loadProfiles() {
   if (!profilesBody) return;
   profilesBody.innerHTML = '<tr><td colspan="5">Carregando...</td></tr>';
@@ -311,7 +305,6 @@ addUserBtn?.addEventListener('click', async () => {
   const email = canon(newUserEmail.value);
   if (!email || !email.includes('@')) return alert('Informe um e-mail válido.');
   try {
-    // Adiciona o perfil com o email, mas o ID precisa ser preenchido por um trigger no Supabase
     await supabase.from('profiles').upsert([{ email, role: 'member', active: true }], { onConflict: 'email' });
   } catch (err) {
     alert('Erro ao adicionar: ' + (err.message || err));
@@ -321,9 +314,6 @@ addUserBtn?.addEventListener('click', async () => {
   }
 });
 
-/* ================================
-   EVENTOS GERAIS E INICIALIZAÇÃO
-=================================== */
 const handleAuthClick = () => {
   if (!isLoggedIn()) openModal('loginModal');
   else {
@@ -352,11 +342,9 @@ exportButton?.addEventListener('click', async () => {
   XLSX.writeFile(wb, 'inventario_kids.xlsx');
 });
 
-// REALTIME
 supabase.channel('items-realtime').on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, () => loadItems(currentSearch)).subscribe();
 supabase.channel('profiles-realtime').on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, async () => { await refreshAuth(); if (isPanelOpen()) await loadProfiles(); }).subscribe();
 
-// FUNÇÃO DE RETOMADA SEGURA
 const handleAppResume = async () => {
   console.log("🔄 App retomado, revalidando tudo...");
   await refreshAuth();
@@ -366,7 +354,6 @@ const handleAppResume = async () => {
   }
 };
 
-// PONTO DE ENTRADA E GATILHOS DE ROBUSTEZ
 document.addEventListener('DOMContentLoaded', async () => {
   await refreshAuth();
   _loadItems();
