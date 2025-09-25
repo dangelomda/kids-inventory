@@ -1,4 +1,4 @@
-// app.js — Versão Final com Controle de Inicialização (Anti-Congelamento Definitivo)
+// app.js — Versão Final com Keep-Alive (Anti-Congelamento Definitivo)
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
 
@@ -15,7 +15,6 @@ const BUCKET = 'item-photos';
 =================================== */
 const itemForm = document.getElementById('itemForm');
 const itemList = document.getElementById('itemList');
-// ... (demais referências do DOM)
 const submitButton = document.getElementById('submitButton');
 const searchInput = document.getElementById('searchInput');
 const exportButton = document.getElementById('exportButton');
@@ -50,7 +49,7 @@ let currentActive = false;
 let isSubmitting = false;
 let currentSearch = '';
 let realtimeChannels = [];
-let isInitializing = true; // NOSSO "SEMÁFORO"
+let isInitializing = true;
 
 const isLoggedIn = () => !!currentUser;
 const canWrite = () => currentActive && ['member', 'admin'].includes(currentRole);
@@ -60,6 +59,7 @@ const isPanelOpen = () => adminPanel && adminPanel.style.display !== 'none';
 /* ================================
    FUNÇÕES AUXILIARES
 =================================== */
+// ... (O resto das funções auxiliares, compressImage, storage, etc., permanecem as mesmas)
 const canon = (s) => (s || '').trim().toLowerCase();
 function debounce(fn, wait = 300) {
     let t;
@@ -104,9 +104,6 @@ function getSelectedFile() {
     return inputPhotoCamera?.files?.[0] || inputPhotoGallery?.files?.[0] || null;
 }
 
-/* ================================
-   OPERAÇÕES DE STORAGE (FOTOS)
-=================================== */
 function makeKey() {
     const rnd = crypto?.randomUUID?.() || Math.random().toString(36).slice(2);
     return `${rnd}-${Date.now()}.jpg`;
@@ -121,6 +118,7 @@ async function uploadPhotoAndGetRefs(file) {
 async function removeByKey(key) {
     if (key) await supabase.storage.from(BUCKET).remove([key]);
 }
+
 
 /* ================================
    LÓGICA PRINCIPAL DO APP
@@ -395,7 +393,10 @@ const handleAuthClick = () => {
 fabAdmin?.addEventListener('click', handleAuthClick);
 userBadge?.addEventListener('click', handleAuthClick);
 loginButton?.addEventListener('click', () => supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: window.location.origin } }));
-logoutButton?.addEventListener('click', async () => { window.location.reload(); });
+logoutButton?.addEventListener('click', async () => {
+    try { await supabase.auth.signOut(); }
+    finally { window.location.reload(); }
+});
 goAdminBtn?.addEventListener('click', async () => { 
     await refreshAuth(); 
     if(isAdmin()) { 
@@ -444,7 +445,6 @@ function initRealtime() {
 }
 
 const handleAppResume = async () => {
-    // Usa o "semáforo" para não rodar durante a inicialização
     if (isInitializing) {
         console.log("Ignorando 'resume' durante a inicialização inicial.");
         return;
@@ -459,7 +459,7 @@ const handleAppResume = async () => {
 };
 
 document.addEventListener('DOMContentLoaded', async () => {
-    isInitializing = true; // Semáforo fechado
+    isInitializing = true;
     console.log("🚀 DOM Carregado, iniciando aplicação...");
     
     await refreshAuth();
@@ -478,6 +478,24 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
-    console.log("✅ Aplicação pronta. Abrindo semáforo.");
-    isInitializing = false; // Semáforo aberto
+    // --- Keep-Alive Hack ---
+    // Toca um áudio silencioso para tentar manter a aba ativa.
+    const keepAliveAudio = document.createElement('audio');
+    // Áudio MP3 silencioso de 1s em Base64. Não requer arquivo externo.
+    keepAliveAudio.src = "data:audio/mpeg;base64,SUQzBAAAAAABEVRYWFgAAAAtAAADY29tbWVudABCaWdTb3VuZEJhbmsuY29tIC8gTGFTb25vdGhlcXVlLm9yZwBURU5DAAAAHQAAA1N3aXRjaCBQbHVzIMKpIE5DSCBTb2Z0d2FyZQBUSVQyAAAABgAAAzIyMzUAVFNTRQAAAA8AAANMYXZmNTcuODMuMTAwAAAAAAAAAAAAAAD/80DEAAAAA0gAAAAATEFNRTMuMTAwVVVVVVVVVVVVVUxBTUUzLjEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVf/zQsRbAAADSAAAAABVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV";
+    keepAliveAudio.loop = true;
+    keepAliveAudio.volume = 0; // Garante que é inaudível
+
+    // Tenta tocar o áudio. Navegadores modernos podem bloquear isso até uma interação do usuário.
+    let playPromise = keepAliveAudio.play();
+    if (playPromise !== undefined) {
+        playPromise.catch(error => {
+            console.warn("Autoplay do áudio bloqueado. Tentando tocar após o primeiro clique.");
+            // Adiciona um listener para o primeiro clique em qualquer lugar para iniciar o áudio.
+            document.body.addEventListener('click', () => keepAliveAudio.play(), { once: true });
+        });
+    }
+
+    console.log("✅ Aplicação pronta. Semáforo aberto.");
+    isInitializing = false;
 });
