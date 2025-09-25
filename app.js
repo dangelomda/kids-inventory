@@ -457,7 +457,40 @@ const handleAppResume = async () => {
     }
     initRealtime(); // Garante que os canais Realtime "acordem" junto com a aba
 };
+/* ================================
+   DEBUG DE CONEXÃO SUPABASE
+=================================== */
+supabase.auth.onAuthStateChange((event, session) => {
+  console.log(`EVENTO DE AUTH: ${event}`, session);
+});
 
+const channel = supabase.channel('check-connection');
+channel
+  .on('postgres_changes', { event: '*', schema: 'public' }, payload => {
+    console.log('Recebeu mudança no Realtime:', payload);
+  })
+  .on('presence', { event: 'sync' }, () => {
+    console.log('Presença sincronizada:', channel.presenceState());
+  })
+  .subscribe(status => {
+    if (status === 'SUBSCRIBED') {
+      console.log('✅ CONECTADO AO REALTIME!');
+    }
+    if (status === 'CHANNEL_ERROR') {
+      console.error('❌ ERRO DE CANAL REALTIME!');
+    }
+    if (status === 'TIMED_OUT') {
+      console.error('⌛️ TIMEOUT NA CONEXÃO REALTIME!');
+    }
+    if (status === 'CLOSED') {
+      console.warn('🔌 CANAL REALTIME FECHADO!');
+    }
+  });
+
+setInterval(() => {
+    const status = channel.state;
+    console.log(`STATUS ATUAL DO CANAL REALTIME: ${status}`);
+}, 5000); // A cada 5 segundos, informa o status da conexão
 document.addEventListener('DOMContentLoaded', async () => {
     await refreshAuth();
     await _loadItems();
