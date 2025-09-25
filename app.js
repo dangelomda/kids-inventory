@@ -1,4 +1,4 @@
-// app.js — Versão Final com Revalidação Atômica (Anti-Congelamento Definitivo)
+// app.js — Versão Final com Reinicialização de Canais Realtime (Anti-Congelamento Definitivo)
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
 
@@ -15,6 +15,7 @@ const BUCKET = 'item-photos';
 =================================== */
 const itemForm = document.getElementById('itemForm');
 const itemList = document.getElementById('itemList');
+// ... (demais referências do DOM)
 const submitButton = document.getElementById('submitButton');
 const searchInput = document.getElementById('searchInput');
 const exportButton = document.getElementById('exportButton');
@@ -48,6 +49,7 @@ let currentRole = 'visitor';
 let currentActive = false;
 let isSubmitting = false;
 let currentSearch = '';
+let realtimeChannels = []; // Armazena os canais realtime ativos
 
 const isLoggedIn = () => !!currentUser;
 const canWrite = () => currentActive && ['member', 'admin'].includes(currentRole);
@@ -263,15 +265,18 @@ async function loadProfiles() {
     const { data, error } = await supabase.from('profiles').select('id, email, role, active').order('email');
     if (error) { profilesBody.innerHTML = `<tr><td colspan="4">Erro: ${error.message}</td></tr>`; return; }
     profilesBody.innerHTML = '';
+    
     data.forEach(p => {
         const tr = document.createElement('tr');
         tr.dataset.id = p.id;
         tr.dataset.email = p.email;
         tr.dataset.active = p.active;
+        tr.dataset.role = p.role;
+
         tr.innerHTML = `
             <td>${p.email}</td>
-            <td><span class="role-badge ${p.role}">${p.role}</span></td>
-            <td>${p.active ? 'ATIVO' : 'INATIVO'}</td>
+            <td class="role-cell"><span class="role-badge ${p.role}">${p.role}</span></td>
+            <td class="status-cell">${p.active ? 'ATIVO' : 'INATIVO'}</td>
             <td class="admin-row-actions">
                 <button class="btn toggle" data-action="toggle">${p.active ? 'Desativar' : 'Ativar'}</button>
                 <button class="btn promote" data-action="promote">Admin</button>
@@ -295,37 +300,86 @@ profilesBody?.addEventListener('click', async (e) => {
     const tr = button.closest('tr');
     const id = tr.dataset.id;
     const email = tr.dataset.email;
-    const currentlyActive = tr.dataset.active === 'true';
+    const currentActive = tr.dataset.active === 'true';
+    const currentRole = tr.dataset.role;
     const action = button.dataset.action;
 
+    const statusCell = tr.querySelector('.status-cell');
+    const roleCell = tr.querySelector('.role-cell');
+    const toggleButton = tr.querySelector('.toggle');
+
     let query;
-    let confirmation = true;
+    let optimisticUpdate;
+    let revertUI;
 
     switch (action) {
         case 'toggle':
-            query = supabase.from('profiles').update({ active: !currentlyActive }).eq('id', id);
+            const newActiveState = !currentActive;
+            optimisticUpdate = () => {
+                statusCell.textContent = newActiveState ? 'ATIVO' : 'INATIVO';
+                toggleButton.textContent = newActiveState ? 'Desativar' : 'Ativar';
+                tr.dataset.active = newActiveState;
+            };
+            revertUI = () => {
+                statusCell.textContent = currentActive ? 'ATIVO' : 'INATIVO';
+                toggleButton.textContent = currentActive ? 'Desativar' : 'Ativar';
+                tr.dataset.active = currentActive;
+            };
+            query = supabase.from('profiles').update({ active: newActiveState }).eq('id', id);
             break;
+        
         case 'promote':
+            if (currentRole === 'admin') return;
+            optimisticUpdate = () => {
+                roleCell.innerHTML = `<span class="role-badge admin">admin</span>`;
+                tr.dataset.role = 'admin';
+            };
+            revertUI = () => {
+                roleCell.innerHTML = `<span class="role-badge ${currentRole}">${currentRole}</span>`;
+                tr.dataset.role = currentRole;
+            };
             query = supabase.from('profiles').update({ role: 'admin' }).eq('id', id);
             break;
+
         case 'demote':
+            if (currentRole === 'member') return;
+            optimisticUpdate = () => {
+                roleCell.innerHTML = `<span class="role-badge member">member</span>`;
+                tr.dataset.role = 'member';
+            };
+            revertUI = () => {
+                roleCell.innerHTML = `<span class="role-badge ${currentRole}">${currentRole}</span>`;
+                tr.dataset.role = currentRole;
+            };
             query = supabase.from('profiles').update({ role: 'member' }).eq('id', id);
             break;
+        
         case 'delete':
             if (id === currentUser.id) {
                 alert("Você não pode remover a si mesmo.");
                 return;
             }
-            confirmation = confirm(`Tem certeza que deseja remover o usuário ${email}?`);
-            if (confirmation) query = supabase.from('profiles').delete().eq('id', id);
+            if (confirm(`Tem certeza que deseja remover o usuário ${email}?`)) {
+                tr.style.opacity = '0.5';
+                query = supabase.from('profiles').delete().eq('id', id);
+                optimisticUpdate = () => tr.remove();
+                revertUI = () => tr.style.opacity = '1';
+            }
             break;
+
         default: return;
     }
 
-    if (query && confirmation) {
-        const { error } = await query;
-        if (error) alert(`Erro: ${error.message}`);
-        await loadProfiles();
+    if (query) {
+        optimisticUpdate();
+        try {
+            const { error } = await query;
+            if (error) throw error;
+            if (action === 'delete') return;
+        } catch (error) {
+            alert(`A ação falhou: ${error.message}`);
+            revertUI();
+        }
     }
 });
 
@@ -367,27 +421,52 @@ exportButton?.addEventListener('click', async () => {
     XLSX.writeFile(wb, 'inventario_kids.xlsx');
 });
 
-// A função que "acorda" o aplicativo de forma atômica e segura
+// NOVA ARQUITETURA ANTI-CONGELAMENTO
+function initRealtime() {
+    // Remove canais antigos para evitar duplicatas e conexões mortas
+    realtimeChannels.forEach(ch => supabase.removeChannel(ch));
+    realtimeChannels = [];
+    console.log("▶️ Iniciando canais Realtime...");
+
+    const itemsChannel = supabase
+        .channel('items-realtime')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, () => loadItems(currentSearch))
+        .subscribe();
+
+    const profilesChannel = supabase
+        .channel('profiles-realtime')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, async () => {
+            await refreshAuth();
+            if (isPanelOpen()) await loadProfiles();
+        })
+        .subscribe();
+    
+    realtimeChannels.push(itemsChannel, profilesChannel);
+}
+
 const handleAppResume = async () => {
-    console.log("🔄 App retomado, revalidando tudo...");
+    console.log("🔄 App retomado, revalidando sessão e canais...");
     await refreshAuth();
-    await _loadItems(currentSearch); // <-- Correção: Adicionado 'await'
-    if (isPanelOpen() && isAdmin()) {
-        await loadProfiles(); // <-- Correção: Adicionado 'await'
+    if (!currentUser) {
+        openModal('loginModal'); // Só abre se o login realmente foi perdido
+        return;
     }
+    await _loadItems(currentSearch);
+    if (isPanelOpen() && isAdmin()) {
+        await loadProfiles();
+    }
+    initRealtime(); // Garante que os canais Realtime "acordem" junto com a aba
 };
 
 document.addEventListener('DOMContentLoaded', async () => {
     await refreshAuth();
-    _loadItems();
+    await _loadItems();
+    initRealtime(); // Inicia o Realtime no primeiro carregamento
     
     supabase.auth.onAuthStateChange(async (event, session) => {
         await refreshAuth();
         await _loadItems(currentSearch);
     });
-
-    supabase.channel('items-realtime').on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, () => loadItems(currentSearch)).subscribe();
-    supabase.channel('profiles-realtime').on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, async () => { await refreshAuth(); if (isPanelOpen()) await loadProfiles(); }).subscribe();
 
     window.addEventListener('pageshow', handleAppResume);
     document.addEventListener("visibilitychange", () => {
