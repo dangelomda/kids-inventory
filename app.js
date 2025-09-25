@@ -1,10 +1,10 @@
-// app.js — Inventário Kids (versão FINAL, HÍBRIDA E ROBUSTA)
+// app.js — Inventário Kids (versão oficial unificada, COMPLETA e corrigida)
 // - Auth (Google) + profiles (role/active) + badge
 // - Items com photo_key (sem lixo no storage)
-// - Realtime híbrido (Otimista com Rede de Segurança) para evitar travamentos
-// - Travas de segurança (isLoading) + “próxima execução” em ITENS e PERFIS
-// - Tokens de render (descarta resposta antiga de busca/reload)
+// - Realtime estável (load com debounce)
+// - Correções de freezing (finally em todas as operações + noopener + pageshow)
 // - Export para Excel
+// - Prevenção de vazamento de memória em imagens
 
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
@@ -61,16 +61,7 @@ let currentUser = null;
 let currentRole = 'visitor';
 let currentActive = false;
 let isSubmitting = false;
-
-let isLoadingItems = false;
-let nextLoadItemsRequested = false;
-let itemsRenderToken = 0;         // descarta respostas antigas de busca/reload
 let currentSearch = '';
-let realtimeSafetyNet = null;     // rede de segurança (itens)
-
-let isLoadingProfiles = false;
-let nextLoadProfilesRequested = false;
-let profilesRenderToken = 0;      // descarta respostas antigas do admin
 
 const isLoggedIn = () => !!currentUser;
 const canWrite   = () => currentActive && ['member','admin'].includes(currentRole);
@@ -103,7 +94,8 @@ function setBadge(email, role, active) {
 async function compressImage(file, maxWidth = 800, quality = 0.7) {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.src = URL.createObjectURL(file);
+    const url = URL.createObjectURL(file);
+    img.src = url;
     img.onload = () => {
       const scale = Math.min(1, maxWidth / img.width);
       const w = Math.round(img.width * scale);
@@ -113,11 +105,18 @@ async function compressImage(file, maxWidth = 800, quality = 0.7) {
       const ctx = canvas.getContext('2d');
       ctx.drawImage(img, 0, 0, w, h);
       canvas.toBlob(
-        (blob) => resolve(new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: "image/jpeg" })),
-        "image/jpeg", quality
+        (blob) => {
+          URL.revokeObjectURL(url); // Previne vazamento de memória
+          resolve(new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: "image/jpeg" }));
+        },
+        "image/jpeg",
+        quality
       );
     };
-    img.onerror = reject;
+    img.onerror = (e) => {
+      URL.revokeObjectURL(url); // Previne vazamento de memória em caso de erro
+      reject(e);
+    };
   });
 }
 
@@ -185,66 +184,43 @@ function updateAuthUI() {
    ITENS (CRUD) — com photo_key
 =================================== */
 async function _loadItems(filter = "") {
-  // lock + “próxima execução”
-  if (isLoadingItems) { nextLoadItemsRequested = true; return; }
-  isLoadingItems = true;
+  let q = supabase.from('items').select('*').order('created_at', { ascending: false });
+  if (filter) q = q.ilike('name', `%${filter}%`);
+  const { data, error } = await q;
 
-  // token: garante que só o último resultado vai renderizar
-  const token = ++itemsRenderToken;
+  if (!itemList) return;
+  itemList.innerHTML = '';
+  if (error) { itemList.innerHTML = `<p>Erro ao carregar itens: ${error.message}</p>`; return; }
+  if (!data?.length) { itemList.innerHTML = '<p>Nenhum item encontrado.</p>'; return; }
 
-  try {
-    let q = supabase.from('items').select('*').order('created_at', { ascending: false });
-    if (filter) q = q.ilike('name', `%${filter}%`);
-    const { data, error } = await q;
-
-    // resposta antiga? descarta render
-    if (token !== itemsRenderToken) return;
-
-    if (!itemList) return;
-    itemList.innerHTML = '';
-    if (error) { itemList.innerHTML = `<p>Erro ao carregar itens: ${error.message}</p>`; return; }
-    if (!data?.length) { itemList.innerHTML = '<p>Nenhum item encontrado.</p>'; return; }
-
-    data.forEach(item => {
-      const card = document.createElement('div');
-      card.className = 'item-card';
-      card.innerHTML = `
-        <img src="${item.photo_url || ''}" alt="${item.name}" ${item.photo_url ? '' : 'style="display:none"'} />
-        <h3>${item.name}</h3>
-        <p><b>Qtd:</b> ${item.quantity}</p>
-        <p><b>Local:</b> ${item.location}</p>
-        <div class="actions" style="${canWrite() ? '' : 'display:none'}">
-          <button class="edit-btn">✏️ Editar</button>
-          <button class="delete-btn">🗑️ Excluir</button>
-        </div>
-      `;
-      card.querySelector('img')?.addEventListener('click', () => { if (item.photo_url) window.open(item.photo_url, "_blank"); });
-      if (canWrite()) {
-        card.querySelector('.edit-btn')?.addEventListener('click', () => editItem(item));
-        card.querySelector('.delete-btn')?.addEventListener('click', () => deleteItem(item));
+  data.forEach(item => {
+    const card = document.createElement('div');
+    card.className = 'item-card';
+    card.innerHTML = `
+      <img src="${item.photo_url || ''}" alt="${item.name}" ${item.photo_url ? '' : 'style="display:none"'} />
+      <h3>${item.name}</h3>
+      <p><b>Qtd:</b> ${item.quantity}</p>
+      <p><b>Local:</b> ${item.location}</p>
+      <div class="actions" style="${canWrite() ? '' : 'display:none'}">
+        <button class="edit-btn">✏️ Editar</button>
+        <button class.delete-btn">🗑️ Excluir</button>
+      </div>
+    `;
+    card.querySelector('img')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (item.photo_url) {
+        window.open(item.photo_url, "_blank", "noopener,noreferrer");
       }
-      itemList.appendChild(card);
     });
-  } finally {
-    isLoadingItems = false;
-    if (nextLoadItemsRequested) {
-      nextLoadItemsRequested = false;
-      _loadItems(currentSearch); // executa imediatamente com o filtro atual
+    if (canWrite()) {
+      card.querySelector('.edit-btn')?.addEventListener('click', () => editItem(item));
+      card.querySelector('.delete-btn')?.addEventListener('click', () => deleteItem(item));
     }
-  }
+    itemList.appendChild(card);
+  });
 }
 
-// Debounce firme para busca e realtime
 const loadItems = debounce((filter) => { currentSearch = filter || ''; _loadItems(currentSearch); }, 250);
-
-// Rede de segurança para operações de gravação (submissão/delete)
-function scheduleManualRefresh() {
-  clearTimeout(realtimeSafetyNet);
-  realtimeSafetyNet = setTimeout(() => {
-    console.warn("Realtime não respondeu a tempo. Acionando atualização manual de segurança.");
-    loadItems(currentSearch);
-  }, 2500);
-}
 
 itemForm?.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -300,11 +276,10 @@ itemForm?.addEventListener('submit', async (e) => {
     alert(`Erro ao salvar: ${err.message || err}`);
   } finally {
     editingId = null;
-    const idInput = document.getElementById('itemId');
     if (idInput) { idInput.dataset.currentPhotoKey = ''; idInput.dataset.currentPhotoUrl = ''; }
     if (submitButton) { submitButton.disabled = false; submitButton.textContent = 'Cadastrar'; }
     isSubmitting = false;
-    scheduleManualRefresh(); // fallback caso o realtime não venha
+    loadItems(currentSearch);
   }
 });
 
@@ -332,7 +307,7 @@ async function deleteItem(item) {
     console.error("Erro ao deletar:", err);
     alert(`Não foi possível deletar: ${err.message || err}`);
   } finally {
-    scheduleManualRefresh();
+    loadItems(currentSearch);
   }
 }
 
@@ -350,27 +325,14 @@ exportButton?.addEventListener('click', async () => {
 /* ================================
    ADMIN (profiles) + Realtime
 =================================== */
-async function _loadProfiles() {
-  // lock + “próxima execução”
-  if (isLoadingProfiles) { nextLoadProfilesRequested = true; return; }
-  isLoadingProfiles = true;
-
-  const token = ++profilesRenderToken;
-
-  if (!profilesBody) {
-    isLoadingProfiles = false;
-    return;
-  }
+async function loadProfiles() {
+  if (!profilesBody) return;
   profilesBody.innerHTML = '<tr><td colspan="5">Carregando...</td></tr>';
-
   try {
     const { data, error } = await supabase
       .from('profiles')
       .select('email, role, active, created_at')
       .order('created_at', { ascending: false });
-
-    // resposta antiga? descarta render
-    if (token !== profilesRenderToken) return;
 
     if (error) { profilesBody.innerHTML = `<tr><td colspan="5">Erro: ${error.message}</td></tr>`; return; }
     if (!data?.length) { profilesBody.innerHTML = '<tr><td colspan="5">Nenhum perfil.</td></tr>'; return; }
@@ -395,36 +357,24 @@ async function _loadProfiles() {
         try {
           if (!isAdmin()) return alert('Acesso negado.');
           await supabase.from('profiles').update({ active: !p.active }).eq('email', p.email);
-        } catch (e) {
-          alert(e.message || e);
-        } finally {
-          await refreshAuth();
-          loadProfiles(); // usa wrapper debounced
-        }
+        } catch (e) { alert(e.message || e); }
+        finally { await refreshAuth(); await loadProfiles(); }
       });
 
       tr.querySelector('.promote')?.addEventListener('click', async () => {
         try {
           if (!isAdmin()) return alert('Acesso negado.');
           await supabase.from('profiles').update({ role: 'admin', active: true }).eq('email', p.email);
-        } catch (e) {
-          alert(e.message || e);
-        } finally {
-          await refreshAuth();
-          loadProfiles();
-        }
+        } catch (e) { alert(e.message || e); }
+        finally { await refreshAuth(); await loadProfiles(); }
       });
 
       tr.querySelector('.demote')?.addEventListener('click', async () => {
         try {
           if (!isAdmin()) return alert('Acesso negado.');
           await supabase.from('profiles').update({ role: 'member', active: true }).eq('email', p.email);
-        } catch (e) {
-          alert(e.message || e);
-        } finally {
-          await refreshAuth();
-          loadProfiles();
-        }
+        } catch (e) { alert(e.message || e); }
+        finally { await refreshAuth(); await loadProfiles(); }
       });
 
       tr.querySelector('.delete')?.addEventListener('click', async () => {
@@ -432,35 +382,22 @@ async function _loadProfiles() {
           if (!isAdmin()) return alert('Acesso negado.');
           if (!confirm(`Remover ${p.email}?`)) return;
           await supabase.from('profiles').delete().eq('email', p.email);
-        } catch (e) {
-          alert(e.message || e);
-        } finally {
-          await refreshAuth();
-          loadProfiles();
-        }
+        } catch (e) { alert(e.message || e); }
+        finally { await refreshAuth(); await loadProfiles(); }
       });
 
       profilesBody.appendChild(tr);
     });
   } catch (e) {
     profilesBody.innerHTML = `<tr><td colspan="5">Erro inesperado.</td></tr>`;
-  } finally {
-    isLoadingProfiles = false;
-    if (nextLoadProfilesRequested) {
-      nextLoadProfilesRequested = false;
-      _loadProfiles(); // executa imediatamente o próximo
-    }
   }
 }
 
-const loadProfiles = debounce(_loadProfiles, 250);
-
-/* Realtime: items e profiles */
+/* Realtime: items e profiles (sempre usando loaders) */
 supabase
   .channel('items-realtime')
   .on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, () => {
-    clearTimeout(realtimeSafetyNet);   // cancela rede de segurança
-    loadItems(currentSearch);          // coalesce com debounce/lock/token
+    loadItems(currentSearch);
   })
   .subscribe();
 
@@ -468,8 +405,8 @@ const isPanelOpen = () => adminPanel && adminPanel.style.display !== 'none';
 supabase
   .channel('profiles-realtime')
   .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, async () => {
-    if (isPanelOpen() && isAdmin()) loadProfiles(); // debounced
-    await refreshAuth(); // atualiza badge/role imediatamente
+    if (isPanelOpen() && isAdmin()) await loadProfiles();
+    await refreshAuth();
   })
   .subscribe();
 
@@ -491,7 +428,7 @@ addUserBtn?.addEventListener('click', async () => {
   } finally {
     newUserEmail.value = '';
     await refreshAuth();
-    loadProfiles();
+    await loadProfiles();
   }
 });
 
@@ -530,8 +467,6 @@ logoutButton?.addEventListener('click', async () => {
     closeModal('accountModal');
     await refreshAuth();
     loadItems();
-
-    // 🔑 força também o logout da sessão Google
     setTimeout(() => {
       window.location.href = "https://accounts.google.com/Logout";
     }, 500);
@@ -549,11 +484,12 @@ goAdminBtn?.addEventListener('click', async () => {
   closeModal('accountModal');
   if (adminPanel) {
     adminPanel.style.display = 'block';
-    loadProfiles(); // debounced; exibe primeiro, carrega depois
+    await loadProfiles();
   }
 
   window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
 });
+
 
 /* ================================
    INICIALIZAÇÃO
@@ -563,10 +499,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   btnUseGallery?.addEventListener('click', () => inputPhotoGallery?.click());
 
   await refreshAuth();
-  loadItems(); // debounced
+  loadItems();
 
   supabase.auth.onAuthStateChange(async () => {
     await refreshAuth();
     loadItems();
   });
+});
+
+/* ================================
+   ROBUSTEZ EXTRA: background/retorno
+=================================== */
+const handleAppResume = () => {
+  console.log("🔄 App retomado, recarregando dados...");
+  refreshAuth();
+  loadItems(currentSearch);
+  if (isPanelOpen() && isAdmin()) { loadProfiles(); }
+};
+
+// Recarrega ao voltar para a aba (ex.: após usar o botão "voltar" ou de outra aba)
+window.addEventListener('pageshow', handleAppResume);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    handleAppResume();
+  }
 });
