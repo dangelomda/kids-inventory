@@ -275,7 +275,7 @@ async function loadProfiles() {
             <td>${p.email}</td>
             <td class="role-cell"><span class="role-badge ${p.role}">${p.role}</span></td>
             <td class="status-cell">${p.active ? 'ATIVO' : 'INATIVO'}</td>
-            <td class="admin-row-actions">
+            <td class.admin-row-actions">
                 <button class="btn toggle" data-action="toggle">${p.active ? 'Desativar' : 'Ativar'}</button>
                 <button class="btn promote" data-action="promote">Admin</button>
                 <button class="btn demote" data-action="demote">Membro</button>
@@ -437,14 +437,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     supabase.channel('profiles-realtime').on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, async () => { await refreshAuth(); if (isPanelOpen()) await loadProfiles(); }).subscribe();
 
     // LÓGICA DE RECARREGAMENTO FORÇADO ANTI-CONGELAMENTO
-    let lastHiddenAt = null;
+    let lastVisibilityTime = document.timeline.currentTime;
+    
     document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "hidden") {
-            lastHiddenAt = Date.now();
-        } else if (document.visibilityState === "visible") {
+        if (document.visibilityState === 'hidden') {
+            lastVisibilityTime = document.timeline.currentTime;
+        } else if (document.visibilityState === 'visible') {
+            const timeInBackground = document.timeline.currentTime - lastVisibilityTime;
             // Se a aba ficou inativa por mais de 20 segundos, recarrega para garantir a conexão.
-            if (lastHiddenAt && (Date.now() - lastHiddenAt > 20000)) { 
-                console.warn(`Aba inativa por mais de 20s. Recarregando para restaurar a conexão...`);
+            if (timeInBackground > 20000) { 
+                console.warn(`Aba inativa por ${Math.round(timeInBackground / 1000)}s. Recarregando para garantir a conexão.`);
                 window.location.reload(true); // O 'true' força a recarga do servidor
             }
         }
