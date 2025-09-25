@@ -1,6 +1,5 @@
-// app.js — Versão Final com Segurança Aprimorada e Anti-Congelamento
-// - NOVO: Novos usuários são 'visitor' por padrão (via SQL).
-// - NOVO: Ações de escrita (Salvar/Deletar) revalidam o login para evitar congelamento.
+// app.js — Inventário Kids (Versão Final Consolidada e Robusta)
+// Combina a lógica de revalidação agressiva com as melhorias de UX (modal) e segurança (auth por ID).
 
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
@@ -18,7 +17,6 @@ const BUCKET = 'item-photos';
 =================================== */
 const itemForm = document.getElementById('itemForm');
 const itemList = document.getElementById('itemList');
-// ... (demais referências do DOM)
 const submitButton = document.getElementById('submitButton');
 const searchInput = document.getElementById('searchInput');
 const exportButton = document.getElementById('exportButton');
@@ -42,7 +40,6 @@ const accountTitle = document.getElementById('accountTitle');
 const accountSubtitle = document.getElementById('accountSubtitle');
 const goAdminBtn = document.getElementById('goAdminBtn');
 const profilesBody = document.getElementById('profilesBody');
-
 
 /* ================================
    ESTADO GLOBAL
@@ -199,7 +196,7 @@ itemForm?.addEventListener('submit', async (e) => {
     e.preventDefault();
     await refreshAuth(); // ANTI-CONGELAMENTO: Revalida a sessão antes da ação
     if (!canWrite()) {
-        alert("Você não tem permissão para cadastrar itens. Peça a um administrador para promover sua conta.");
+        openModal('loginModal');
         return;
     }
     if (isSubmitting) return;
@@ -229,6 +226,8 @@ itemForm?.addEventListener('submit', async (e) => {
             await supabase.from('items').insert([payload]);
         }
         itemForm.reset();
+        if (inputPhotoCamera) inputPhotoCamera.value = "";
+        if (inputPhotoGallery) inputPhotoGallery.value = "";
     } catch (err) {
         alert(`Erro ao salvar: ${err.message}`);
     } finally {
@@ -241,7 +240,6 @@ itemForm?.addEventListener('submit', async (e) => {
 });
 
 function editItem(item) {
-    // A checagem de permissão será feita antes de salvar, não ao preencher o form.
     document.getElementById('itemId').value = item.id;
     document.getElementById('itemId').dataset.currentPhotoKey = item.photo_key || '';
     document.getElementById('itemName').value = item.name;
@@ -256,7 +254,7 @@ async function deleteItem(item) {
     if (!confirm(`Excluir "${item.name}"?`)) return;
     await refreshAuth(); // ANTI-CONGELAMENTO: Revalida a sessão antes da ação
     if (!canWrite()) {
-        alert("Você não tem permissão para excluir itens. Peça a um administrador para promover sua conta.");
+        openModal('loginModal');
         return;
     }
     try {
@@ -272,21 +270,21 @@ async function deleteItem(item) {
 async function loadProfiles() {
     if (!profilesBody) return;
     profilesBody.innerHTML = '<tr><td colspan="4">Carregando...</td></tr>';
-    const { data, error } = await supabase.from('profiles').select('id, email, role, active').order('email');
+    const { data, error } = await supabase.from('profiles').select('id, email, role, active, created_at').order('email');
     if (error) { profilesBody.innerHTML = `<tr><td colspan="4">Erro: ${error.message}</td></tr>`; return; }
     profilesBody.innerHTML = '';
     data.forEach(p => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${p.email}</td><td><span class="role-badge ${p.role}">${p.role}</span></td><td>${p.active ? 'ATIVO' : 'INATIVO'}</td><td class="admin-row-actions"><button class="btn toggle">${p.active ? 'Ativar' : 'Desativar'}</button><button class="btn promote">Admin</button><button class="btn demote">Membro</button></td>`;
+        tr.innerHTML = `<td>${p.email}</td><td><span class="role-badge ${p.role}">${p.role}</span></td><td>${p.active ? 'ATIVO' : 'INATIVO'}</td><td class="admin-row-actions"><button class="btn toggle">${p.active ? 'Desativar' : 'Ativar'}</button><button class="btn promote">Admin</button><button class="btn demote">Membro</button><button class="btn delete">Remover</button></td>`;
         
         const setupAdminAction = (selector, action) => {
             tr.querySelector(selector)?.addEventListener('click', async () => {
-                await refreshAuth();
+                await refreshAuth(); // ANTI-CONGELAMENTO: Revalida a permissão no momento do clique
                 if (isAdmin()) {
                     await action();
                     await loadProfiles();
                 } else {
-                    alert('Acesso negado.');
+                    alert('Acesso negado. Sua sessão pode ter expirado.');
                 }
             });
         };
@@ -294,6 +292,22 @@ async function loadProfiles() {
         setupAdminAction('.toggle', () => supabase.from('profiles').update({ active: !p.active }).eq('id', p.id));
         setupAdminAction('.promote', () => supabase.from('profiles').update({ role: 'admin' }).eq('id', p.id));
         setupAdminAction('.demote', () => supabase.from('profiles').update({ role: 'member' }).eq('id', p.id));
+        
+        tr.querySelector('.delete')?.addEventListener('click', async () => {
+            await refreshAuth(); // ANTI-CONGELAMENTO: Revalida também na exclusão
+            if (isAdmin()) {
+                if (p.id === currentUser.id) {
+                    alert("Você не pode remover a si mesmo.");
+                    return;
+                }
+                if (confirm(`Remover o usuário ${p.email}?`)) {
+                    await supabase.from('profiles').delete().eq('id', p.id);
+                    await loadProfiles();
+                }
+            } else {
+                alert('Acesso negado.');
+            }
+        });
         
         profilesBody.appendChild(tr);
     });
@@ -311,11 +325,23 @@ fabAdmin?.addEventListener('click', handleAuthClick);
 userBadge?.addEventListener('click', handleAuthClick);
 loginButton?.addEventListener('click', () => supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: window.location.origin } }));
 
+// LOGOUT COMPLETO: Restaura a funcionalidade de troca de conta
 logoutButton?.addEventListener('click', async () => {
-    try { await supabase.auth.signOut(); }
-    catch (e) { console.error('Erro no signOut:', e); }
-    finally {
-        window.location.reload();
+    try {
+        await supabase.auth.signOut();
+    } catch (e) {
+        console.error('Erro no signOut:', e);
+    } finally {
+        editingId = null;
+        itemForm?.reset();
+        if (adminPanel) adminPanel.style.display = 'none';
+        closeModal('accountModal');
+        await refreshAuth();
+        await _loadItems();
+        // Força o logout da sessão Google para permitir troca de conta
+        setTimeout(() => {
+            window.location.href = "https://accounts.google.com/Logout";
+        }, 500);
     }
 });
 
