@@ -1,10 +1,11 @@
-// app.js — Inventário Kids (versão oficial unificada, COMPLETA e corrigida)
+// app.js — Inventário Kids (versão FINAL, estável e robusta)
 // - Auth (Google) + profiles (role/active) + badge
 // - Items com photo_key (sem lixo no storage)
 // - Realtime estável (load com debounce)
-// - Correções de freezing (finally em todas as operações + noopener + pageshow)
+// - Correções de freezing (finally, noopener, e revalidação de sessão)
 // - Export para Excel
 // - Prevenção de vazamento de memória em imagens
+// - Correção visual do botão Excluir
 
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
@@ -66,6 +67,7 @@ let currentSearch = '';
 const isLoggedIn = () => !!currentUser;
 const canWrite   = () => currentActive && ['member','admin'].includes(currentRole);
 const isAdmin    = () => currentActive && currentRole === 'admin';
+const isPanelOpen = () => adminPanel && adminPanel.style.display !== 'none';
 
 /* ================================
    HELPERS
@@ -106,15 +108,13 @@ async function compressImage(file, maxWidth = 800, quality = 0.7) {
       ctx.drawImage(img, 0, 0, w, h);
       canvas.toBlob(
         (blob) => {
-          URL.revokeObjectURL(url); // Previne vazamento de memória
+          URL.revokeObjectURL(url);
           resolve(new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: "image/jpeg" }));
-        },
-        "image/jpeg",
-        quality
+        }, "image/jpeg", quality
       );
     };
     img.onerror = (e) => {
-      URL.revokeObjectURL(url); // Previne vazamento de memória em caso de erro
+      URL.revokeObjectURL(url);
       reject(e);
     };
   });
@@ -133,7 +133,7 @@ function makeKey() {
 }
 function publicUrlFromKey(key) {
   const { data } = supabase.storage.from(BUCKET).getPublicUrl(key);
-  return `${data.publicUrl}?v=${Date.now()}`; // cache-bust
+  return `${data.publicUrl}?v=${Date.now()}`;
 }
 async function uploadPhotoAndGetRefs(file) {
   const key = makeKey();
@@ -203,7 +203,7 @@ async function _loadItems(filter = "") {
       <p><b>Local:</b> ${item.location}</p>
       <div class="actions" style="${canWrite() ? '' : 'display:none'}">
         <button class="edit-btn">✏️ Editar</button>
-        <button class.delete-btn">🗑️ Excluir</button>
+        <button class="delete-btn">🗑️ Excluir</button>
       </div>
     `;
     card.querySelector('img')?.addEventListener('click', (e) => {
@@ -393,7 +393,7 @@ async function loadProfiles() {
   }
 }
 
-/* Realtime: items e profiles (sempre usando loaders) */
+/* Realtime: items e profiles */
 supabase
   .channel('items-realtime')
   .on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, () => {
@@ -401,7 +401,6 @@ supabase
   })
   .subscribe();
 
-const isPanelOpen = () => adminPanel && adminPanel.style.display !== 'none';
 supabase
   .channel('profiles-realtime')
   .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, async () => {
@@ -410,7 +409,7 @@ supabase
   })
   .subscribe();
 
-/* Adicionar membro — UPSERT idempotente + refresh */
+/* Adicionar membro */
 addUserBtn?.addEventListener('click', async () => {
   await refreshAuth();
   if (!isAdmin()) return alert('Apenas administradores.');
@@ -476,7 +475,7 @@ logoutButton?.addEventListener('click', async () => {
 closeModalBtn?.addEventListener('click', () => closeModal('loginModal'));
 closeAccountModal?.addEventListener('click', () => closeModal('accountModal'));
 
-/* Abrir painel Admin — SEM “carregando infinito” */
+/* Abrir painel Admin */
 goAdminBtn?.addEventListener('click', async () => {
   await refreshAuth();
   if (!isAdmin()) return alert('Acesso negado.');
@@ -501,23 +500,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   await refreshAuth();
   loadItems();
 
-  supabase.auth.onAuthStateChange(async () => {
+  supabase.auth.onAuthStateChange(async (event, session) => {
     await refreshAuth();
     loadItems();
+    if (isPanelOpen() && isAdmin()) {
+        await loadProfiles();
+    }
   });
 });
 
 /* ================================
    ROBUSTEZ EXTRA: background/retorno
 =================================== */
-const handleAppResume = () => {
-  console.log("🔄 App retomado, recarregando dados...");
-  refreshAuth();
+const handleAppResume = async () => {
+  console.log("🔄 App retomado, revalidando sessão e recarregando dados...");
+  await refreshAuth();
+  
   loadItems(currentSearch);
-  if (isPanelOpen() && isAdmin()) { loadProfiles(); }
+  if (isPanelOpen() && isAdmin()) {
+    await loadProfiles();
+  }
 };
 
-// Recarrega ao voltar para a aba (ex.: após usar o botão "voltar" ou de outra aba)
 window.addEventListener('pageshow', handleAppResume);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
